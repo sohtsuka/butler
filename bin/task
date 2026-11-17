@@ -393,14 +393,22 @@ def cmd_send(args: argparse.Namespace) -> None:
     db = connect()
     task = load(db, args.id)
     text = f"{args.text}\n\nWhen you finish, pipe an updated report into `{TASK_BIN} report {task.id}`."
+    pane = live_pane(task)
+    # Clear before prompting: the worker can report while `agent prompt` is in flight, and a
+    # clear afterwards would erase that report with the worker none the wiser.
+    db.execute("UPDATE tasks SET report = NULL, reported_at = NULL WHERE id = ?", (task.id,))
     try:
-        herdr("agent", "prompt", live_pane(task), text)
+        herdr("agent", "prompt", pane, text)
     except HerdrError as e:
+        # The prompt never landed, so put the old round back -- unless a report has since arrived.
+        db.execute(
+            "UPDATE tasks SET report = ?, reported_at = ? WHERE id = ? AND report IS NULL",
+            (task.report, task.reported_at, task.id),
+        )
         if e.code != "agent_blocked":
             raise
         sys.exit(f"task {task.label} is at a dialog, so text is refused. Answer it with "
                  f"`bin/task keys {task.label} <key>...` (e.g. down enter, esc) or `bin/task focus`.")
-    db.execute("UPDATE tasks SET report = NULL, reported_at = NULL WHERE id = ?", (task.id,))
     print(f"sent to task {task.label}")
 
 
