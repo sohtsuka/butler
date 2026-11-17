@@ -33,4 +33,5 @@ Each feature file starts with an H1 and one paragraph, then four H2s in this ord
 - [Task lifecycle](./task-lifecycle.md) covers starting a worker in a plain dir or a worktree, waiting for its report, showing, listing and closing.
 - [Blocked worker](./blocked-worker.md) covers a worker stuck at a dialog: detection, peek, refused text, answering with keys, and closing.
 - [Follow-up](./follow-up.md) covers sending a finished worker another instruction and waiting for its new report.
+- [Codex worker](./codex-worker.md) covers starting Codex workers with `--agent codex`, their reports and follow-ups, the agent column, and the butler choosing Codex.
 - [Butler agent](./butler-agent.md) covers launching, finding the running butler, resuming the butler, its role, delegating a request end to end, and the SessionStart hook.
