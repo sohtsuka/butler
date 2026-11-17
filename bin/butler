@@ -1,20 +1,30 @@
 #!/usr/bin/env python3
-"""Start the butler agent in a new herdr tab, or say where it runs if it is already up.
+"""Start the butler agent, or say where it runs if it is already up.
 
-It never switches the view: the human moves to the butler's tab by hand."""
+Run from a herdr pane the human is sitting in, the butler takes that pane over:
+this process replaces itself with claude, so no tab appears and the view never
+moves. When the pane cannot be handed over -- outside herdr, with output piped,
+or with another agent occupying it -- it falls back to a new tab, opened without
+focus: the human moves there by hand."""
 
 import glob
 import json
 import os
 import subprocess
 import sys
+import time
 import uuid
+from datetime import datetime, timezone
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
 ID_FILE = REPO / "state" / "butler-session-id"
 # herdr agent names are global; a second instance (e.g. a verification run) needs its own.
 NAME = os.environ.get("BUTLER_NAME", "butler")
+# Internal flag for the helper child that names the agent after a takeover, see take_over().
+CLAIM = "--claim-pane"
+CLAIM_TIMEOUT = 120.0
+CLAIM_LOG = REPO / "state" / "butler-claim.log"
 
 
 def herdr(*args: str) -> tuple[int, dict]:
@@ -35,13 +45,80 @@ def session_args() -> list[str]:
     return ["--resume", sid] if resumable else ["--session-id", sid]
 
 
-def main() -> None:
-    code, found = herdr("agent", "get", NAME)
-    if code == 0:
-        agent = found["result"]["agent"]
-        print(f"butler is running in {agent['pane_id']} ({agent['tab_id']})")
-        return
+def claude_args() -> list[str]:
+    return [
+        *session_args(),
+        "--append-system-prompt-file", str(REPO / "butler" / "prompt.md"),
+        "--settings", str(REPO / "butler" / "settings.json"),
+    ]
 
+
+def own_pane() -> str | None:
+    """The caller's herdr pane, when replacing this process with claude would land in it."""
+    pane = os.environ.get("HERDR_PANE_ID")
+    if os.environ.get("HERDR_ENV") != "1" or not pane:
+        return None
+    # claude needs the terminal itself; a pipe or a redirect means this process is not it.
+    if not all(stream.isatty() for stream in (sys.stdin, sys.stdout, sys.stderr)):
+        return None
+    code, here = herdr("pane", "current", "--current")
+    if code or here["result"]["pane"]["pane_id"] != pane:
+        return None
+    # An agent in this pane owns its name and its process, even while suspended: leave it be.
+    if here["result"]["pane"].get("agent"):
+        return None
+    code, info = herdr("pane", "process-info", "--current")
+    if code:
+        return None
+    # exec replaces only this process, so the pane's foreground must be exactly our group.
+    foreground = info["result"]["process_info"]["foreground_process_group_id"]
+    return pane if foreground == os.getpgrp() else None
+
+
+def claim(pane: str) -> None:
+    """Name the agent herdr comes to see in `pane`.
+
+    `herdr agent start --pane` wants a pane at its shell prompt, and this pane is busy
+    running bin/butler itself, so the takeover cannot go through it. The exec'd claude is
+    detected by herdr like any hand-started agent; this child, detached before the exec,
+    waits for that and attaches $BUTLER_NAME with `agent rename`, as bin/task does."""
+    deadline = time.monotonic() + CLAIM_TIMEOUT
+    why = "herdr never reported an agent in the pane"
+    while time.monotonic() < deadline:
+        code, got = herdr("agent", "get", pane)
+        if code == 0 and got["result"]["agent"]["agent"] == "claude":
+            if got["result"]["agent"].get("name") == NAME:
+                return
+            code, renamed = herdr("agent", "rename", pane, NAME)
+            if code == 0:
+                return
+            why = renamed["error"]["message"]
+        time.sleep(0.5)
+    # Nobody is left to tell: the parent became claude. bin/task and a later bin/butler
+    # both look the butler up by name, so leave a trace of why that will not resolve.
+    CLAIM_LOG.parent.mkdir(parents=True, exist_ok=True)
+    with CLAIM_LOG.open("a") as log:
+        log.write(f"{datetime.now(timezone.utc).isoformat()} {pane} not named {NAME}: {why}\n")
+
+
+def take_over(pane: str) -> None:
+    os.environ["BUTLER_NAME"] = NAME  # the butler's own bin/task calls share this namespace
+    os.chdir(REPO)  # the butler runs bin/task by that relative path, pre-approved
+    child = subprocess.Popen(
+        [sys.executable, str(Path(__file__).resolve()), CLAIM, pane],
+        start_new_session=True,
+        stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+    )
+    print(f"butler is starting in this pane ({pane}); it answers to {NAME} once herdr sees it")
+    sys.stdout.flush()
+    try:
+        os.execvp("claude", ["claude", *claude_args()])
+    except OSError as e:  # the exec failed, so this process is still the one talking
+        child.terminate()
+        sys.exit(f"butler: cannot run claude: {e}")
+
+
+def start_in_new_tab() -> None:
     workspace = os.environ.get("HERDR_WORKSPACE_ID")
     code, made = herdr("tab", "create", "--cwd", str(REPO), "--label", NAME, "--no-focus",
                        "--env", f"BUTLER_NAME={NAME}",
@@ -52,16 +129,30 @@ def main() -> None:
 
     code, started = herdr(
         "agent", "start", NAME, "--kind", "claude", "--pane", pane, "--",
-        *session_args(),
-        "--append-system-prompt-file", str(REPO / "butler" / "prompt.md"),
-        "--settings", str(REPO / "butler" / "settings.json"),
+        *claude_args(),
     )
     if code and started["error"]["code"] != "agent_not_ready":
         herdr("tab", "close", tab)
         sys.exit(f"butler: {started['error']['message']}")
     if code:
         print("butler is waiting on a startup dialog in its tab", file=sys.stderr)
-    print(f"butler started in {pane} ({tab})")
+    print(f"butler started in {pane} ({tab}), a new tab: this pane could not host it")
+
+
+def main() -> None:
+    if len(sys.argv) == 3 and sys.argv[1] == CLAIM:
+        claim(sys.argv[2])
+        return
+
+    code, found = herdr("agent", "get", NAME)
+    if code == 0:
+        agent = found["result"]["agent"]
+        print(f"butler is running in {agent['pane_id']} ({agent['tab_id']})")
+        return
+
+    if pane := own_pane():
+        take_over(pane)
+    start_in_new_tab()
 
 
 if __name__ == "__main__":

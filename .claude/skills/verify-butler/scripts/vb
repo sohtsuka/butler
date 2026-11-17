@@ -3,7 +3,8 @@
 #   vb launch                      create a run, print its RUN_DIR
 #   vb doctor  RUN_DIR             read-only: is this run worth driving?
 #   vb run     RUN_DIR NAME -- CMD record CMD (stdin passes through) as artifacts/NAME.log
-#   vb butler  RUN_DIR             start this run's butler agent (bin/butler)
+#   vb butler  RUN_DIR             start this run's butler agent (bin/butler, from here)
+#   vb butler-here RUN_DIR         run bin/butler in a shell pane of the run, as the operator does
 #   vb say     RUN_DIR NAME TEXT   prompt the run's butler, wait for its turn, save its screen
 #   vb settle  RUN_DIR NAME SECS [MAX]  wait until the run's butler stays idle/done SECS s (give up after MAX, default 600), save its screen
 #   vb cleanup RUN_DIR             tear down everything the run made; keep artifacts/
@@ -95,6 +96,36 @@ cmd_butler() {
   (cd "$RUN_DIR/app" && bin/butler) | tee -a "$RUN_DIR/artifacts/butler-launch.log"
 }
 
+# The operator's own path: a herdr pane at a shell prompt runs bin/butler, which takes that
+# pane over instead of opening a tab. `vb butler` cannot show this: its output is piped, so
+# bin/butler keeps the pipe's reader alive and uses the new-tab fallback.
+cmd_butler_here() {
+  load "$1"
+  local log="$RUN_DIR/artifacts/butler-here.log" created pane tab waited=0
+  created="$(herdr tab create --cwd "$RUN_DIR/app" --label "$BUTLER_NAME-shell" --no-focus \
+    --env "BUTLER_NAME=$BUTLER_NAME" --workspace "$HERDR_WORKSPACE_ID")"
+  pane="$(jq -r '.result.root_pane.pane_id' <<<"$created")"
+  tab="$(jq -r '.result.tab.tab_id' <<<"$created")"
+  [[ -n "$pane" && "$pane" != null ]] || die "could not create the shell pane"
+  { echo "shell pane $pane (tab $tab) in workspace $HERDR_WORKSPACE_ID"
+    echo "--- tabs before bin/butler"
+    herdr tab list --workspace "$HERDR_WORKSPACE_ID" | jq -r '.result.tabs[].tab_id'; } >"$log"
+  sleep 1   # let the pane's shell reach its prompt before typing at it
+  herdr pane run "$pane" "bin/butler" >/dev/null
+  # bin/butler execs claude in that pane; a detached child names it once herdr sees it.
+  until herdr agent get "$BUTLER_NAME" >/dev/null 2>&1; do
+    (( waited < 180 )) || { cat "$log" >&2; die "no agent named $BUTLER_NAME after ${waited}s"; }
+    sleep 1; waited=$((waited + 1))
+  done
+  { echo "--- tabs after bin/butler"
+    herdr tab list --workspace "$HERDR_WORKSPACE_ID" | jq -r '.result.tabs[].tab_id'
+    echo "--- agent get $BUTLER_NAME"
+    herdr agent get "$BUTLER_NAME"
+    echo "--- claim log"
+    cat "$RUN_DIR/app/state/butler-claim.log" 2>/dev/null || echo "(none)"; } >>"$log"
+  cat "$log"
+}
+
 cmd_say() {
   load "$1"; local name="$2" text="$3"
   herdr agent prompt "$BUTLER_NAME" "$text" --wait --timeout 600000 >/dev/null
@@ -142,5 +173,6 @@ cmd_cleanup() {
 sub="${1:-}"; shift || true
 case "$sub" in
   launch|doctor|run|butler|say|settle|cleanup) "cmd_$sub" "$@" ;;
-  *) sed -n '2,10p' "$0"; exit 2 ;;
+  butler-here) cmd_butler_here "$@" ;;
+  *) sed -n '2,11p' "$0"; exit 2 ;;
 esac
