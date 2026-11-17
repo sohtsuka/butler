@@ -64,8 +64,9 @@ def take_over(pane: str) -> None:
     # herdr only names an agent it can already see, and `agent start` wants a pane sitting at
     # its shell prompt, so the name has to arrive from outside, once the exec'd claude shows up.
     subprocess.Popen(
-        ["sh", "-c", 'for _ in $(seq 240); do herdr agent rename "$1" "$2" && break; sleep 0.5; done',
-         "sh", pane, NAME],
+        ["sh", "-c", 'for _ in $(seq 240); do kill -0 "$3" 2>/dev/null || exit 0; '
+         'herdr agent rename "$1" "$2" && break; sleep 0.5; done',
+         "sh", pane, NAME, str(os.getpid())],  # exec keeps this PID; stop if claude exits
         start_new_session=True,
         stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
     )
