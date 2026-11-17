@@ -19,6 +19,7 @@ The operator's own butler is probably running right now, in the same herdr sessi
 - **State:** `bin/task` keeps state in `<its checkout>/state/butler.db`, so a copy of `bin/` + `butler/` has its own DB.
 - **Agent names:** herdr names are global. `BUTLER_NAME` namespaces them: the butler agent is `$BUTLER_NAME`, and workers are `$BUTLER_NAME-0001`, and so on. The live instance uses the default, `butler`.
 - **Run folder:** each run lives in `<parent of this checkout>/.butler-verify/<run-id>/`, or `$VB_ROOT/<run-id>/` when `VB_ROOT` is set. That parent directory should be trusted in Claude Code (see Gotchas), and the run folder is outside any git repo. Its contents are `app/` (a copy of the working tree, so uncommitted edits are verified), `git-<id>/` (fixture git repo), `plain-<id>/` (fixture plain dir), `artifacts/` (evidence) and `env`.
+- **Workspace:** `launch` creates a dedicated herdr workspace for the run (label `vb-<run-id>`, no focus) and records it in `env` as `RUN_WORKSPACE_ID`. `vb` exports it to its commands as `HERDR_WORKSPACE_ID`, and `bin/task` and `bin/butler` open their tabs there, so plain-dir workers and the run's butler never land next to the operator's own tabs. Worktree workers get their own workspace from `herdr worktree create` as before.
 - **Concurrency:** two runs can go side by side. Fixture repo names carry the run id because herdr puts worktrees at `~/.herdr/worktrees/<repo-name>/<branch>`.
 
 ## Launch
@@ -28,7 +29,7 @@ Run inside herdr (`HERDR_ENV` must be set). From the repo root:
 ```bash
 VB=.claude/skills/verify-butler/scripts/vb
 RUN=$($VB launch)          # prints <parent of this checkout>/.butler-verify/<run-id>
-source "$RUN/env"          # RUN_ID, BUTLER_NAME, SRC, FIXTURE_GIT, FIXTURE_PLAIN
+source "$RUN/env"          # RUN_ID, BUTLER_NAME, SRC, FIXTURE_GIT, FIXTURE_PLAIN, RUN_WORKSPACE_ID
 ```
 
 The run is ready once `launch` prints the path. There is no process to wait for. Workers start per task. The run's butler agent starts only when a journey calls `$VB butler "$RUN"`.
@@ -42,6 +43,8 @@ $VB doctor "$RUN"
 Read-only. Every line must say `ok`:
 
 - **inside herdr**
+- **run workspace exists:** fails for a run made before dedicated workspaces. Launch a new run.
+- **run workspace is not the caller's**
 - **herdr server running**
 - **app copy matches working tree:** fails once you edit the source after `launch`. Launch a new run, or re-copy `bin/` and `butler/` into `$RUN/app/`.
 - **task CLI is the run copy**
@@ -61,7 +64,7 @@ $VB run "$RUN" <artifact-name> -- task <subcommand> ...       # stdin passes thr
 Drive the agent through:
 
 ```bash
-$VB butler "$RUN"                      # bin/butler for this run; puts focus back on your pane
+$VB butler "$RUN"                      # bin/butler for this run (never takes focus)
 $VB say    "$RUN" <name> "<text>"      # prompt the run's butler, wait for its turn, save its screen
 $VB settle "$RUN" <name> <secs> [max]  # wait until the butler stays idle/done <secs>s (e.g. after a background wake), save screen
 ```
@@ -95,7 +98,7 @@ $VB cleanup "$RUN"
 Cleanup does the following:
 
 - Closes every task in the run's DB with `--remove-worktree`.
-- Closes the run's butler tab.
+- Closes the run's butler tab, then the run's dedicated workspace (even if it is empty). It never closes the caller's workspace.
 - Closes workspaces whose every pane is inside the run, such as the repo-root workspace that `herdr worktree create` opens. It never closes a workspace that also holds another pane.
 - Deletes `app/` and the fixtures. It keeps `artifacts/` and `env`.
 - Fails loudly if any `$BUTLER_NAME*` agent is still alive.
@@ -106,5 +109,6 @@ It kills nothing by process name. Run it after every attempt, failed ones includ
 
 - **Trust dialog on worktree tasks.** Claude asks for folder trust in a worktree unless the main repo itself is trusted. A fresh `git-<id>` fixture is not trusted, so a worktree task starts `blocked`. Answer with `task keys <id> down enter`, after peeking to confirm it is the trust dialog. That writes a trust entry for the fixture path into `~/.claude.json`, which outlives the run. Do not edit `~/.claude.json` while Claude is running.
 - **Plain non-git directories under a trusted parent never prompt.** `plain-<id>` starts straight away. A directory under `/tmp` is untrusted and always prompts, which makes it the blocked journey's fixture.
-- **`$VB butler` steals focus.** `bin/butler` focuses the new tab, and `vb butler` puts focus back on the caller's pane. Raw `bin/butler` does not.
+- **Nothing in a run takes focus.** `bin/butler` always opens its tab with `--no-focus` and, when the butler is already running, only prints where it is. `bin/task` always uses `--no-focus`; only `task focus` switches the view, because the human asked for it.
+- **Sourcing `env` leaves your own `HERDR_WORKSPACE_ID` alone.** Only commands run through `vb` land in the run workspace. A raw `bin/task` call from your shell opens its tab in your workspace.
 - **Workers run in the operator's default permission mode,** auto mode on this machine. A journey that needs a permission prompt cannot rely on one appearing.
