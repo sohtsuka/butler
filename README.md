@@ -53,3 +53,13 @@ bin/butler
 - worktree では、コミットに必要な `.git` 内のディレクトリ（worktree 自身の gitdir と `objects`、`refs`、`logs`）も `--add-dir` で渡すので、コミットも承認なしで通ります。`hooks` と `config` は読み取り専用のままです。push など、それ以外への書き込みは承認待ちになります。
 - 初めてのリポジトリでは Codex 自身のフォルダ信頼画面で `blocked` になります。Claude と違い `enter` だけで「Trust and continue」になります。信頼は `~/.codex/config.toml` に残ります。
 - 承認ポリシー、モデルなどは `~/.codex/config.toml` の設定に従います。
+
+## テスト
+
+`bin/task` の回帰テスト。herdr も操作者の DB も触らないので、そのまま走らせて構いません。
+
+```
+python3 -m unittest discover -s tests
+```
+
+実機での確認は `.claude/skills/verify-butler` の方です。こちらは単体テストだけです。
