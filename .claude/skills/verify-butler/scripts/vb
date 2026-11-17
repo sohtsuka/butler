@@ -18,16 +18,17 @@ die() { echo "vb: $*" >&2; exit 1; }
 load() {
   RUN_DIR="${1:?RUN_DIR required}"
   [[ -f "$RUN_DIR/env" ]] || die "$RUN_DIR is not a vb run"
-  # The caller's own workspace, before env swaps in the run's.
+  # The caller's own workspace. env names the run's RUN_WORKSPACE_ID, not HERDR_WORKSPACE_ID,
+  # so a caller that sources env keeps its own id.
   CALLER_WORKSPACE_ID="${HERDR_WORKSPACE_ID:-}"
-  unset HERDR_WORKSPACE_ID   # a run made before dedicated workspaces has none; never fall back to the caller's
+  RUN_WORKSPACE_ID=""   # a run made before dedicated workspaces has none; never fall back to the caller's
   # shellcheck disable=SC1091
   source "$RUN_DIR/env"
-  [[ -n "${HERDR_WORKSPACE_ID:-}" ]] && export HERDR_WORKSPACE_ID
+  unset HERDR_WORKSPACE_ID
+  [[ -n "$RUN_WORKSPACE_ID" ]] && export HERDR_WORKSPACE_ID="$RUN_WORKSPACE_ID"
   # bin/task and bin/butler open tabs in $HERDR_WORKSPACE_ID, so this keeps every
   # tab the run makes inside the run's own workspace, away from the operator's tabs.
-  # bin/butler then opens the run's butler without --focus, so the operator's view never moves.
-  export BUTLER_NAME BUTLER_NO_FOCUS=1 PATH="$RUN_DIR/app/bin:$PATH"
+  export BUTLER_NAME PATH="$RUN_DIR/app/bin:$PATH"
 }
 herdr_json() { herdr "$@" 2>/dev/null || true; }
 
@@ -53,7 +54,7 @@ BUTLER_NAME=vb$id
 SRC=$SRC
 FIXTURE_GIT=$git
 FIXTURE_PLAIN=$plain
-HERDR_WORKSPACE_ID=$ws
+RUN_WORKSPACE_ID=$ws
 EOF
   echo "$run"
 }
@@ -91,7 +92,7 @@ save_screen() { herdr pane read "$(butler_pane)" --source recent-unwrapped --lin
 
 cmd_butler() {
   load "$1"
-  (cd "$RUN_DIR/app" && bin/butler) | tee "$RUN_DIR/artifacts/butler-launch.log"
+  (cd "$RUN_DIR/app" && bin/butler) | tee -a "$RUN_DIR/artifacts/butler-launch.log"
 }
 
 cmd_say() {

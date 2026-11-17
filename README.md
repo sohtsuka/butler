@@ -8,8 +8,8 @@
 bin/butler
 ```
 
-- herdr の中で実行します。butler がまだいなければ、新しいタブで起動します。すでにいれば、そのタブにフォーカスするだけです。
-- 環境変数 `BUTLER_NO_FOCUS=1` を付けると、タブを開いてもフォーカスを移さず、起動済みの butler にもフォーカスしません（検証用）。
+- herdr の中で実行します。butler がまだいなければ、新しいタブで起動します。すでにいれば、何も起動せずにその場所（pane とタブ）を表示します。
+- `bin/butler` は画面を切り替えません。butler のタブへは手で移動してください。
 - セッション ID は `state/butler-session-id` に固定されています。2 回目以降の起動は `--resume` で同じ会話を再開します。
 - butler の役割は起動フラグ（`--append-system-prompt-file butler/prompt.md`、`--settings butler/settings.json`）だけで与えます。このリポジトリで普通に Claude Code を開いても butler にはなりません。
 

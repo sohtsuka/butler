@@ -5,7 +5,7 @@
 ## Sub-features
 
 - `launch` makes `bin/butler` start the agent `$BUTLER_NAME` in a new tab with `--session-id <uuid>`, and writes `state/butler-session-id`.
-- `focus` makes a second `bin/butler` start nothing and focus the running agent, so there is still exactly one `$BUTLER_NAME` agent. With `BUTLER_NO_FOCUS=1`, which `vb` sets, it starts nothing and leaves focus alone.
+- `running` makes a second `bin/butler` start nothing, print `butler is running in <pane> (<tab>)` and exit 0, without moving focus, so there is still exactly one `$BUTLER_NAME` agent.
 - `resume` makes `bin/butler`, after the tab is closed, start again with `--resume <same uuid>` and keep the earlier conversation.
 - `role` makes the butler say it delegates through `bin/task` and does not edit files. Edit and Write are denied.
 - `delegate` turns a request into a task. The butler arms `task wait` in the background, is woken by it, and summarizes the report.
@@ -23,8 +23,8 @@ Preconditions:
 - Baseline from the README.
 - No agent named `$BUTLER_NAME` (`$VB doctor` lists run agents).
 
-- **Launch.** Run `$VB butler "$RUN"`. `artifacts/butler-launch.log` says `butler started in <pane>`, and `herdr agent get "$BUTLER_NAME"` has `agent_status` `idle`. `$RUN/app/state/butler-session-id` holds a uuid.
-- **Focus, not duplicate.** Run `$VB butler "$RUN"` again. `herdr agent list` shows exactly one `$BUTLER_NAME`.
+- **Launch.** Run `$VB butler "$RUN"`. `artifacts/butler-launch.log` says `butler started in <pane> (<tab>)`, and `herdr agent get "$BUTLER_NAME"` has `agent_status` `idle`. `$RUN/app/state/butler-session-id` holds a uuid.
+- **Running, not duplicate.** Run `$VB butler "$RUN"` again. It prints `butler is running in <pane> (<tab>)`, focus stays where it was, and `herdr agent list` shows exactly one `$BUTLER_NAME`.
 - **Role.** Run `$VB say "$RUN" ag-role "あなたの役割は？短く答えて。"`. The screen shows a Japanese answer saying it manages tasks, delegates through `bin/task`, and does not edit files.
 - **Delegate.** Run `$VB say "$RUN" ag-ask "$FIXTURE_PLAIN に butler.txt を作って中身を 'via butler' にしてください。worktree は不要です。"`, then `$VB settle "$RUN" ag-summary 20`. `task list --all` (via `vb run`) shows a new task whose cwd is `$FIXTURE_PLAIN`. `cat "$FIXTURE_PLAIN/butler.txt"` prints `via butler`. `ag-summary.screen.txt` shows the butler summarizing the report after a background wake.
 - **Resume.** Close the butler's tab with `herdr tab close "$(herdr agent get "$BUTLER_NAME" | jq -r .result.agent.tab_id)"`, then run `$VB butler "$RUN"` and `$VB say "$RUN" ag-resume "さっき私が最初に聞いた質問は何でしたか？"`. Then run `ps -o args= -p "$(herdr pane process-info --pane "$(herdr agent get "$BUTLER_NAME" | jq -r .result.agent.pane_id)" | jq -r '.result.process_info.foreground_processes[0].pid')" > "$RUN/artifacts/ag-resume-args.txt"`. The args contain `--resume <the uuid in $RUN/app/state/butler-session-id>`, and the answer quotes the role question.
