@@ -183,5 +183,88 @@ class WorkerCommandTests(TaskTest):
         self.assertEqual(shlex.split(command), [str(self.task_bin), "report", str(task_id)])
 
 
+class EventTests(TaskTest):
+    def kinds(self, task_id):
+        return [r["kind"] for r in self.db.execute(
+            "SELECT kind FROM events WHERE task_id = ? ORDER BY id", (task_id,))]
+
+    def send(self, task_id, prompt):
+        with patch.object(task, "live_pane", return_value="w999:p1"), \
+                patch.object(task, "herdr", side_effect=prompt):
+            task.cmd_send(argparse.Namespace(id=task_id, text="follow up"))
+
+    def test_report_survives_followup_in_history(self):
+        task_id = self.seed()
+        self.report(task_id, "first round")
+        self.send(task_id, lambda *args: {})
+        self.report(task_id, "second round")
+        details = [r["detail"] for r in self.db.execute(
+            "SELECT detail FROM events WHERE task_id = ? ORDER BY id", (task_id,))]
+        self.assertEqual(details, ["first round", "follow up", "second round"])
+
+    def test_followup_sorts_before_the_report_it_causes(self):
+        task_id = self.seed()
+        self.send(task_id, lambda *args: self.report(task_id, "during prompt"))
+        self.assertEqual(self.kinds(task_id), ["followup", "reported"])
+
+    def test_rejected_followup_leaves_no_event(self):
+        task_id = self.seed()
+        def reject(*args):
+            raise task.HerdrError("agent_blocked", "dialog")
+        with self.assertRaises(SystemExit):
+            self.send(task_id, reject)
+        self.assertEqual(self.kinds(task_id), [])
+
+    def test_seen_states_are_recorded_once_per_change(self):
+        task_id = self.seed()
+        for kind in ("unblocked", "blocked", "blocked", "unblocked", "unblocked", "blocked"):
+            task.record_seen(self.db, task_id, kind)
+        self.assertEqual(self.kinds(task_id), ["blocked", "unblocked", "blocked"])
+
+    def wait(self, task_id, states):
+        states = iter(states)
+        def live(pane):
+            try:
+                return next(states)
+            except StopIteration:
+                self.report(task_id, "done")  # seen as reported on the next poll
+                return "working"
+        with patch.object(task, "live_status", side_effect=live), \
+                patch.object(task, "POLL_SECONDS", 0), \
+                patch.object(task, "herdr", return_value={}):
+            task.cmd_wait(argparse.Namespace(id=task_id, timeout=None))
+
+    def test_waits_record_blocked_then_unblocked(self):
+        task_id = self.db.execute(
+            "INSERT INTO tasks (title, cwd, brief, created_at, pane_id) VALUES (?, ?, ?, ?, ?)",
+            ("test", str(self.root), "brief", task.now(), "w999:p1"),
+        ).lastrowid
+        self.wait(task_id, ["working", "blocked"])  # returns at the dialog
+        self.wait(task_id, ["blocked"])              # a waiter re-armed too early
+        self.wait(task_id, ["working", "working"])   # answered; then the worker reports
+        self.assertEqual(self.kinds(task_id), ["blocked", "unblocked", "reported"])
+
+    def test_close_records_once(self):
+        task_id = self.seed()
+        for _ in range(2):
+            task.cmd_close(argparse.Namespace(id=task_id, remove_worktree=False))
+        self.assertEqual(self.kinds(task_id), ["closed"])
+
+    def test_timeline_falls_back_to_task_timestamps(self):
+        task_id = self.seed()
+        t = task.load(self.db, task_id)
+        self.assertEqual([e.kind for e in task.task_events(self.db, t)], ["started", "reported"])
+
+    def test_timeline_prints_events_in_order(self):
+        task_id = self.seed()
+        self.report(task_id, "line one\nline two")
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            task.cmd_timeline(argparse.Namespace(id=None, all=False, limit=None))
+        lines = out.getvalue().splitlines()
+        self.assertEqual(len(lines), 1)
+        self.assertRegex(lines[0], rf"{task_id:04d}  reported   test  \| line one$")
+
+
 if __name__ == "__main__":
     unittest.main()
