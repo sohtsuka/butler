@@ -13,6 +13,9 @@ REPO = Path(__file__).resolve().parent.parent
 ID_FILE = REPO / "state" / "butler-session-id"
 # herdr agent names are global; a second instance (e.g. a verification run) needs its own.
 NAME = os.environ.get("BUTLER_NAME", "butler")
+# BUTLER_NO_FOCUS=1 starts (or finds) the butler without switching the operator's view,
+# e.g. for a verification run driven from another pane.
+FOCUS = os.environ.get("BUTLER_NO_FOCUS") != "1"
 
 
 def herdr(*args: str) -> tuple[int, dict]:
@@ -35,10 +38,11 @@ def session_args() -> list[str]:
 
 def main() -> None:
     if herdr("agent", "get", NAME)[0] == 0:
-        sys.exit(herdr("agent", "focus", NAME)[0])
+        sys.exit(herdr("agent", "focus", NAME)[0] if FOCUS else 0)
 
     workspace = os.environ.get("HERDR_WORKSPACE_ID")
-    code, made = herdr("tab", "create", "--cwd", str(REPO), "--label", NAME, "--focus",
+    code, made = herdr("tab", "create", "--cwd", str(REPO), "--label", NAME,
+                       "--focus" if FOCUS else "--no-focus",
                        "--env", f"BUTLER_NAME={NAME}",
                        *(["--workspace", workspace] if workspace else []))
     if code:

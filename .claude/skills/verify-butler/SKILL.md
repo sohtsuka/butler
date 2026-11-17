@@ -64,7 +64,7 @@ $VB run "$RUN" <artifact-name> -- task <subcommand> ...       # stdin passes thr
 Drive the agent through:
 
 ```bash
-$VB butler "$RUN"                      # bin/butler for this run; puts focus back on your pane
+$VB butler "$RUN"                      # bin/butler for this run, opened without taking focus
 $VB say    "$RUN" <name> "<text>"      # prompt the run's butler, wait for its turn, save its screen
 $VB settle "$RUN" <name> <secs> [max]  # wait until the butler stays idle/done <secs>s (e.g. after a background wake), save screen
 ```
@@ -109,6 +109,6 @@ It kills nothing by process name. Run it after every attempt, failed ones includ
 
 - **Trust dialog on worktree tasks.** Claude asks for folder trust in a worktree unless the main repo itself is trusted. A fresh `git-<id>` fixture is not trusted, so a worktree task starts `blocked`. Answer with `task keys <id> down enter`, after peeking to confirm it is the trust dialog. That writes a trust entry for the fixture path into `~/.claude.json`, which outlives the run. Do not edit `~/.claude.json` while Claude is running.
 - **Plain non-git directories under a trusted parent never prompt.** `plain-<id>` starts straight away. A directory under `/tmp` is untrusted and always prompts, which makes it the blocked journey's fixture.
-- **`$VB butler` steals focus briefly.** `bin/butler` focuses its new tab, which switches the view to the run workspace. `vb butler` puts focus back on the caller's pane, so the view returns to the caller's workspace. Raw `bin/butler` does not.
+- **Nothing in a run takes focus.** `vb` exports `BUTLER_NO_FOCUS=1`, so `bin/butler` opens the run's butler with `--no-focus` and, when it is already running, does not focus it. `bin/task` always uses `--no-focus`; only `task focus` switches the view, on purpose. A raw `bin/butler` without that variable still focuses, as it does for the operator.
 - **After `source "$RUN/env"`, your shell's `HERDR_WORKSPACE_ID` is the run's.** That is what makes a raw `bin/task` call land in the run workspace too. Open a new shell to get your own back.
 - **Workers run in the operator's default permission mode,** auto mode on this machine. A journey that needs a permission prompt cannot rely on one appearing.

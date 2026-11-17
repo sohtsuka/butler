@@ -26,7 +26,8 @@ load() {
   [[ -n "${HERDR_WORKSPACE_ID:-}" ]] && export HERDR_WORKSPACE_ID
   # bin/task and bin/butler open tabs in $HERDR_WORKSPACE_ID, so this keeps every
   # tab the run makes inside the run's own workspace, away from the operator's tabs.
-  export BUTLER_NAME PATH="$RUN_DIR/app/bin:$PATH"
+  # bin/butler then opens the run's butler without --focus, so the operator's view never moves.
+  export BUTLER_NAME BUTLER_NO_FOCUS=1 PATH="$RUN_DIR/app/bin:$PATH"
 }
 herdr_json() { herdr "$@" 2>/dev/null || true; }
 
@@ -90,10 +91,7 @@ save_screen() { herdr pane read "$(butler_pane)" --source recent-unwrapped --lin
 
 cmd_butler() {
   load "$1"
-  local before; before="$(herdr pane current | jq -r '.result.pane.pane_id')"
   (cd "$RUN_DIR/app" && bin/butler) | tee "$RUN_DIR/artifacts/butler-launch.log"
-  # bin/butler focuses its new tab, which switches the view to the run workspace.
-  herdr agent focus "$before" >/dev/null 2>&1 || true
 }
 
 cmd_say() {
