@@ -1,0 +1,446 @@
+#!/usr/bin/env python3
+"""Task CLI for the butler: start, watch and close herdr-hosted Claude workers."""
+
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import re
+import sqlite3
+import subprocess
+import sys
+import time
+from dataclasses import dataclass
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Literal
+
+REPO = Path(__file__).resolve().parent.parent
+TASK_BIN = REPO / "bin" / "task"
+DB_PATH = REPO / "state" / "butler.db"
+POLL_SECONDS = 3.0
+IDLE_POLLS_WITHOUT_WORKING = 5
+START_TIMEOUT_MS = "10000"
+
+LiveStatus = Literal["working", "blocked", "idle", "done", "unknown", "gone"]
+State = Literal["closed", "reported", "working", "blocked", "idle", "done", "unknown", "gone"]
+
+SCHEMA = """
+CREATE TABLE IF NOT EXISTS tasks (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  title TEXT NOT NULL,
+  cwd TEXT NOT NULL,
+  repo_root TEXT,
+  worktree_path TEXT,
+  branch TEXT,
+  workspace_id TEXT,
+  tab_id TEXT,
+  pane_id TEXT,
+  brief TEXT NOT NULL,
+  report TEXT,
+  created_at TEXT NOT NULL,
+  reported_at TEXT,
+  closed_at TEXT
+);
+"""
+
+
+@dataclass(frozen=True)
+class Task:
+    id: int
+    title: str
+    cwd: str
+    repo_root: str | None
+    worktree_path: str | None
+    branch: str | None
+    workspace_id: str | None
+    tab_id: str | None
+    pane_id: str | None
+    brief: str
+    report: str | None
+    created_at: str
+    reported_at: str | None
+    closed_at: str | None
+
+    @property
+    def label(self) -> str:
+        return f"{self.id:04d}"
+
+
+class HerdrError(Exception):
+    def __init__(self, code: str, message: str):
+        super().__init__(f"herdr {code}: {message}")
+        self.code = code
+
+
+def herdr_text(*args: str) -> str:
+    """The one boundary to herdr: run it, raise its JSON error (stderr, exit 1), return stdout."""
+    proc = subprocess.run(["herdr", *args], capture_output=True, text=True)
+    if proc.returncode != 0:
+        try:
+            error = json.loads(proc.stderr)["error"]
+        except (json.JSONDecodeError, KeyError):
+            raise HerdrError("bad_output", (proc.stdout + proc.stderr).strip()) from None
+        raise HerdrError(error["code"], error["message"])
+    return proc.stdout
+
+
+def herdr(*args: str) -> dict:
+    return json.loads(herdr_text(*args))["result"]
+
+
+def connect() -> sqlite3.Connection:
+    DB_PATH.parent.mkdir(parents=True, exist_ok=True)
+    db = sqlite3.connect(DB_PATH, timeout=5.0, isolation_level=None)
+    db.row_factory = sqlite3.Row
+    db.execute("PRAGMA busy_timeout=5000")
+    # Switching to WAL ignores busy_timeout, so racing first opens of a new DB retry here.
+    for _ in range(50):
+        try:
+            db.execute("PRAGMA journal_mode=WAL")
+            break
+        except sqlite3.OperationalError:
+            time.sleep(0.1)
+    db.executescript(SCHEMA)
+    return db
+
+
+def now() -> str:
+    return datetime.now(timezone.utc).isoformat(timespec="seconds")
+
+
+def load(db: sqlite3.Connection, task_id: int) -> Task:
+    row = db.execute("SELECT * FROM tasks WHERE id = ?", (task_id,)).fetchone()
+    if row is None:
+        sys.exit(f"task {task_id:04d} not found")
+    return Task(**dict(row))
+
+
+def live_status(pane_id: str | None) -> LiveStatus:
+    if pane_id is None:
+        return "gone"
+    try:
+        return herdr("pane", "get", pane_id)["pane"]["agent_status"]
+    except HerdrError as e:
+        if e.code == "pane_not_found":
+            return "gone"
+        raise
+
+
+def derive_state(task: Task) -> State:
+    if task.closed_at:
+        return "closed"
+    if task.report is not None:
+        return "reported"
+    return live_status(task.pane_id)
+
+
+def slugify(title: str) -> str:
+    slug = re.sub(r"[^a-z0-9]+", "-", title.lower()).strip("-")[:30].strip("-")
+    return slug or "task"
+
+
+def git_toplevel(cwd: Path) -> str | None:
+    proc = subprocess.run(
+        ["git", "-C", str(cwd), "rev-parse", "--show-toplevel"], capture_output=True, text=True
+    )
+    return proc.stdout.strip() if proc.returncode == 0 else None
+
+
+def kickoff(task_id: int) -> str:
+    return (
+        f"You are a worker for task {task_id:04d}. "
+        f"Run `{TASK_BIN} brief {task_id}` to read your brief, then do it. "
+        f"When you finish, whether it worked or not, pipe a report into "
+        f"`{TASK_BIN} report {task_id}` (stdin, e.g. a heredoc) covering: outcome; "
+        f"what changed (files, branch, commits); how you verified it; open questions."
+    )
+
+
+def cmd_start(args: argparse.Namespace) -> None:
+    brief = sys.stdin.read()
+    if not brief.strip():
+        sys.exit("task start: brief on stdin is empty")
+    cwd = Path(args.cwd).expanduser().resolve()
+    if not cwd.is_dir():
+        sys.exit(f"task start: {cwd} is not a directory")
+    repo_root = None if args.no_worktree else git_toplevel(cwd)
+
+    db = connect()
+    task_id = db.execute(
+        "INSERT INTO tasks (title, cwd, repo_root, brief, created_at) VALUES (?, ?, ?, ?, ?)",
+        (args.title, str(cwd), repo_root, brief, now()),
+    ).lastrowid
+    label = f"{task_id:04d}"
+    name = f"task-{label}"
+    try:
+        if repo_root:
+            branch = f"butler/{label}-{slugify(args.title)}"
+            made = herdr("worktree", "create", "--cwd", str(cwd), "--branch", branch, "--no-focus")
+            pane = made["root_pane"]
+            ids = (made["worktree"]["path"], branch, made["workspace"]["workspace_id"])
+        else:
+            pane = herdr(
+                "tab", "create", "--cwd", str(cwd), "--label", name, "--no-focus",
+                *(["--workspace", ws] if (ws := os.environ.get("HERDR_WORKSPACE_ID")) else []),
+            )["root_pane"]
+            ids = (None, None, None)
+        db.execute(
+            "UPDATE tasks SET worktree_path = ?, branch = ?, workspace_id = ?, tab_id = ?, pane_id = ?"
+            " WHERE id = ?",
+            (*ids, pane["tab_id"], pane["pane_id"], task_id),
+        )
+        # The kickoff rides in claude's argv, so it survives a startup dialog (folder trust):
+        # claude runs it once the dialog is answered, while `agent prompt` is refused when blocked.
+        # With a prompt in argv, `agent start` only reports ready after the first turn ends, and on
+        # timeout it drops the name while claude keeps working. Rename to reclaim it; that fails,
+        # and so fails the start, only if no agent came up in the pane.
+        try:
+            herdr("agent", "start", name, "--kind", "claude", "--pane", pane["pane_id"],
+                  "--timeout", START_TIMEOUT_MS, "--", "--name", name, kickoff(task_id))
+        except HerdrError as e:
+            if e.code == "timeout":
+                herdr("agent", "rename", pane["pane_id"], name)
+            elif e.code == "agent_not_ready":
+                print(f"{label} is blocked at startup; see `bin/task peek {label}`", file=sys.stderr)
+            else:
+                raise
+    except HerdrError as e:
+        db.execute("UPDATE tasks SET closed_at = ? WHERE id = ?", (now(), task_id))
+        close_herdr(load(db, task_id), remove_worktree=True, delete_branch=True)
+        sys.exit(f"task start: {e}; task {label} closed")
+    print(label)
+
+
+def cmd_brief(args: argparse.Namespace) -> None:
+    sys.stdout.write(load(connect(), args.id).brief)
+
+
+def cmd_report(args: argparse.Namespace) -> None:
+    report = sys.stdin.read()
+    if not report.strip():
+        sys.exit("task report: report on stdin is empty")
+    db = connect()
+    task = load(db, args.id)
+    if task.closed_at:
+        sys.exit(f"task report: task {task.label} is closed")
+    db.execute(
+        "UPDATE tasks SET report = ?, reported_at = ? WHERE id = ?", (report, now(), task.id)
+    )
+    print(f"report saved for task {task.label}")
+
+
+def cmd_wait(args: argparse.Namespace) -> None:
+    db = connect()
+    deadline = time.monotonic() + args.timeout if args.timeout else None
+    saw_working = False
+    stopped_polls = 0
+    while True:
+        state = derive_state(load(db, args.id))
+        if state == "working":
+            saw_working = True
+        stopped_polls = stopped_polls + 1 if state in ("idle", "done", "unknown") else 0
+        outcome = _wait_outcome(state, saw_working, stopped_polls)
+        if outcome:
+            break
+        if deadline and time.monotonic() >= deadline:
+            print("timeout")
+            return
+        time.sleep(POLL_SECONDS)
+    print(outcome)
+    sound = "request" if outcome == "blocked" else "done"
+    try:
+        herdr("notification", "show", f"task {args.id:04d}: {outcome}", "--sound", sound)
+    except HerdrError:
+        pass
+
+
+def _wait_outcome(state: State, saw_working: bool, stopped_polls: int) -> str | None:
+    if state in ("reported", "blocked", "gone", "closed"):
+        return state
+    if stopped_polls and (saw_working or stopped_polls >= IDLE_POLLS_WITHOUT_WORKING):
+        return "stopped-without-report"
+    return None
+
+
+def all_tasks(db: sqlite3.Connection, include_closed: bool) -> list[Task]:
+    sql = "SELECT * FROM tasks" + ("" if include_closed else " WHERE closed_at IS NULL") + " ORDER BY id"
+    return [Task(**dict(r)) for r in db.execute(sql)]
+
+
+def where(task: Task) -> str:
+    return task.branch or task.cwd
+
+
+def cmd_list(args: argparse.Namespace) -> None:
+    db = connect()
+    rows = [(t, derive_state(t)) for t in all_tasks(db, include_closed=args.all and not args.for_hook)]
+    if args.for_hook:
+        print(hook_block(rows))
+        return
+    if not rows:
+        print("no tasks")
+        return
+    width = max(len(t.title) for t, _ in rows)
+    for t, state in rows:
+        print(f"{t.label}  {state:<9}  {t.title:<{width}}  {where(t)}")
+
+
+def hook_block(rows: list[tuple[Task, State]]) -> str:
+    if not rows:
+        return "[butler] No open tasks. State lives in bin/task; trust `bin/task list` over memory."
+    lines = ["[butler] Open tasks (from bin/task; trust this over memory):"]
+    lines += [f"- {t.label} {state}: {t.title} ({where(t)})" for t, state in rows]
+    rearm = [t.label for t, state in rows if state not in ("reported", "gone", "blocked")]
+    blocked = [t.label for t, state in rows if state == "blocked"]
+    if rearm:
+        lines.append(
+            "Re-arm a waiter now for each of these, one Bash call each with run_in_background: true: "
+            + ", ".join(f"`bin/task wait {i}`" for i in rearm)
+        )
+    if blocked:
+        lines.append(
+            "Blocked on a question: " + ", ".join(blocked) + ". Tell the human (see `bin/task peek <id>`);"
+            " re-arm `bin/task wait <id>` only after it has been answered."
+        )
+    return "\n".join(lines)
+
+
+def cmd_show(args: argparse.Namespace) -> None:
+    t = load(connect(), args.id)
+    print(f"id:        {t.label}")
+    print(f"state:     {derive_state(t)}")
+    print(f"title:     {t.title}")
+    for name in ("cwd", "repo_root", "worktree_path", "branch", "workspace_id", "tab_id",
+                 "pane_id", "created_at", "reported_at", "closed_at"):
+        if (value := getattr(t, name)) is not None:
+            print(f"{name + ':':<10} {value}")
+    print("\n--- brief ---\n" + t.brief.rstrip())
+    if t.report is not None:
+        print("\n--- report ---\n" + t.report.rstrip())
+
+
+def live_pane(t: Task) -> str:
+    if t.closed_at or live_status(t.pane_id) == "gone":
+        sys.exit(f"task {t.label}: pane is gone")
+    return t.pane_id
+
+
+def cmd_peek(args: argparse.Namespace) -> None:
+    pane = live_pane(load(connect(), args.id))
+    print(herdr_text("pane", "read", pane, "--source", "recent-unwrapped", "--lines", str(args.lines)).rstrip())
+
+
+def cmd_send(args: argparse.Namespace) -> None:
+    """A follow-up opens a new round: the old report is cleared so `task wait` waits for the next."""
+    db = connect()
+    task = load(db, args.id)
+    text = f"{args.text}\n\nWhen you finish, pipe an updated report into `{TASK_BIN} report {task.id}`."
+    try:
+        herdr("agent", "prompt", live_pane(task), text)
+    except HerdrError as e:
+        if e.code != "agent_blocked":
+            raise
+        sys.exit(f"task {task.label} is at a dialog, so text is refused. Answer it with "
+                 f"`bin/task keys {task.label} <key>...` (e.g. down enter, esc) or `bin/task focus`.")
+    db.execute("UPDATE tasks SET report = NULL, reported_at = NULL WHERE id = ?", (task.id,))
+    print(f"sent to task {task.label}")
+
+
+def cmd_keys(args: argparse.Namespace) -> None:
+    """Prints the worker's state once it leaves `blocked` (or after 5s), so a waiter armed next is fresh."""
+    pane = live_pane(load(connect(), args.id))
+    herdr("agent", "send-keys", pane, *args.keys)
+    deadline = time.monotonic() + 5
+    while (state := live_status(pane)) == "blocked" and time.monotonic() < deadline:
+        time.sleep(0.5)
+    print(f"sent keys to task {args.id:04d}; now {state}")
+
+
+def cmd_focus(args: argparse.Namespace) -> None:
+    herdr("agent", "focus", live_pane(load(connect(), args.id)))
+
+
+def close_herdr(task: Task, remove_worktree: bool, delete_branch: bool = False) -> None:
+    target = ("workspace", task.workspace_id) if task.workspace_id else ("tab", task.tab_id)
+    if target[1]:
+        try:
+            herdr(target[0], "close", target[1])
+        except HerdrError as e:
+            if not e.code.endswith("not_found"):
+                raise
+    if remove_worktree and task.worktree_path and Path(task.worktree_path).exists():
+        subprocess.run(
+            ["git", "-C", task.repo_root, "worktree", "remove", "--force", task.worktree_path],
+            check=True,
+        )
+    if delete_branch and task.repo_root and task.branch:
+        subprocess.run(["git", "-C", task.repo_root, "branch", "-D", task.branch], capture_output=True)
+
+
+def cmd_close(args: argparse.Namespace) -> None:
+    db = connect()
+    task = load(db, args.id)
+    close_herdr(task, args.remove_worktree)
+    if not task.closed_at:
+        db.execute("UPDATE tasks SET closed_at = ? WHERE id = ?", (now(), task.id))
+    kept = task.worktree_path and Path(task.worktree_path).exists()
+    print(f"closed task {task.label}" + (f" (worktree kept: {task.worktree_path})" if kept else ""))
+
+
+def main() -> None:
+    p = argparse.ArgumentParser(prog="task")
+    sub = p.add_subparsers(dest="cmd", required=True)
+
+    s = sub.add_parser("start", help="start a worker; brief on stdin")
+    s.add_argument("--title", required=True)
+    s.add_argument("--cwd", required=True)
+    s.add_argument("--no-worktree", action="store_true")
+    s.set_defaults(fn=cmd_start)
+
+    for name, fn in (("brief", cmd_brief), ("report", cmd_report), ("show", cmd_show),
+                     ("focus", cmd_focus)):
+        s = sub.add_parser(name)
+        s.add_argument("id", type=int)
+        s.set_defaults(fn=fn)
+
+    s = sub.add_parser("wait")
+    s.add_argument("id", type=int)
+    s.add_argument("--timeout", type=float)
+    s.set_defaults(fn=cmd_wait)
+
+    s = sub.add_parser("list")
+    s.add_argument("--all", action="store_true")
+    s.add_argument("--for-hook", action="store_true")
+    s.set_defaults(fn=cmd_list)
+
+    s = sub.add_parser("peek")
+    s.add_argument("id", type=int)
+    s.add_argument("--lines", type=int, default=40)
+    s.set_defaults(fn=cmd_peek)
+
+    s = sub.add_parser("send")
+    s.add_argument("id", type=int)
+    s.add_argument("text")
+    s.set_defaults(fn=cmd_send)
+
+    s = sub.add_parser("keys", help="press keys in the worker's UI, e.g. at a dialog")
+    s.add_argument("id", type=int)
+    s.add_argument("keys", nargs="+")
+    s.set_defaults(fn=cmd_keys)
+
+    s = sub.add_parser("close")
+    s.add_argument("id", type=int)
+    s.add_argument("--remove-worktree", action="store_true")
+    s.set_defaults(fn=cmd_close)
+
+    args = p.parse_args()
+    try:
+        args.fn(args)
+    except HerdrError as e:
+        sys.exit(f"task {args.cmd}: {e}")
+
+
+if __name__ == "__main__":
+    main()
