@@ -164,6 +164,8 @@ cmd_cleanup() {
     fi
   done
   rm -rf "$RUN_DIR/app" "$RUN_DIR/home" "$FIXTURE_GIT" "$FIXTURE_PLAIN"
+  # herdr leaves the fixture's (now empty) worktree parent behind.
+  rmdir "$HOME/.herdr/worktrees/$(basename "$FIXTURE_GIT")" 2>/dev/null || true
   local left; left="$(herdr agent list | jq -r --arg n "$BUTLER_NAME" '[.result.agents[] | select((.name // "") | startswith($n))] | length')"
   [[ "$left" == 0 ]] || die "agents still alive under $BUTLER_NAME"
   echo "cleaned $RUN_DIR; evidence kept in $RUN_DIR/artifacts"

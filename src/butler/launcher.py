@@ -24,6 +24,9 @@ except ImportError:  # run as a plain script from a checkout
 
 STATE_HOME = paths.home()  # the butler's state, and its working directory
 ID_FILE = STATE_HOME / "butler-session-id"
+# Resolved now: take_over() chdirs to STATE_HOME, after which a relative argv[0] (`bin/butler`
+# run from a checkout) would point into STATE_HOME instead.
+LAUNCHER = Path(sys.argv[0]).absolute()
 # herdr agent names are global; a second instance (e.g. a verification run) needs its own.
 NAME = os.environ.get("BUTLER_NAME", "butler")
 
@@ -53,7 +56,7 @@ def claude_args() -> list[str]:
 
 def task_exe() -> str:
     """The task CLI that ships with this launcher: its sibling, as installed or in a checkout."""
-    sibling = Path(sys.argv[0]).absolute().parent / "butler-task"
+    sibling = LAUNCHER.parent / "butler-task"
     if sibling.is_file() and os.access(sibling, os.X_OK):
         return str(sibling)
     if found := shutil.which("butler-task"):
