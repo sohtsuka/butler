@@ -12,13 +12,13 @@ butler has two surfaces, both terminal-based:
 
 There is no server and no build. The harness is herdr itself, plus the helper `scripts/vb` in this folder.
 
-The operator's own butler is probably running right now, in the same herdr session. Never drive it, and never touch `/home/satoshi/src/butler/state/`. Every run gets its own copy of the app, DB and agent-name namespace.
+The operator's own butler is probably running right now, in the same herdr session. Never drive it, and never touch the `state/` of the checkout it runs from. Every run gets its own copy of the app, DB and agent-name namespace.
 
 ## How isolation works
 
 - **State:** `bin/task` keeps state in `<its checkout>/state/butler.db`, so a copy of `bin/` + `butler/` has its own DB.
 - **Agent names:** herdr names are global. `BUTLER_NAME` namespaces them: the butler agent is `$BUTLER_NAME`, and workers are `$BUTLER_NAME-0001`, and so on. The live instance uses the default, `butler`.
-- **Run folder:** each run lives in `/home/satoshi/src/.butler-verify/<run-id>/`. It is under a Claude-trusted parent (`/home/satoshi/src`) and outside any git repo. Its contents are `app/` (a copy of the working tree, so uncommitted edits are verified), `git-<id>/` (fixture git repo), `plain-<id>/` (fixture plain dir), `artifacts/` (evidence) and `env`.
+- **Run folder:** each run lives in `<parent of this checkout>/.butler-verify/<run-id>/`, or `$VB_ROOT/<run-id>/` when `VB_ROOT` is set. That parent directory should be trusted in Claude Code (see Gotchas), and the run folder is outside any git repo. Its contents are `app/` (a copy of the working tree, so uncommitted edits are verified), `git-<id>/` (fixture git repo), `plain-<id>/` (fixture plain dir), `artifacts/` (evidence) and `env`.
 - **Concurrency:** two runs can go side by side. Fixture repo names carry the run id because herdr puts worktrees at `~/.herdr/worktrees/<repo-name>/<branch>`.
 
 ## Launch
@@ -27,7 +27,7 @@ Run inside herdr (`HERDR_ENV` must be set). From the repo root:
 
 ```bash
 VB=.claude/skills/verify-butler/scripts/vb
-RUN=$($VB launch)          # prints /home/satoshi/src/.butler-verify/<run-id>
+RUN=$($VB launch)          # prints <parent of this checkout>/.butler-verify/<run-id>
 source "$RUN/env"          # RUN_ID, BUTLER_NAME, SRC, FIXTURE_GIT, FIXTURE_PLAIN
 ```
 
@@ -100,7 +100,7 @@ Cleanup does the following:
 - Deletes `app/` and the fixtures. It keeps `artifacts/` and `env`.
 - Fails loudly if any `$BUTLER_NAME*` agent is still alive.
 
-It kills nothing by process name. Run it after every attempt, failed ones included. Evidence stays in `/home/satoshi/src/.butler-verify/<run-id>/artifacts/`. Delete old run folders by hand when they are no longer needed.
+It kills nothing by process name. Run it after every attempt, failed ones included. Evidence stays in `$RUN/artifacts/`. Delete old run folders by hand when they are no longer needed.
 
 ## Gotchas
 

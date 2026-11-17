@@ -5,7 +5,7 @@ This directory is the maintained source for verifying butler's user-facing behav
 ## Baseline preconditions
 
 - A fresh run from `$VB launch`, with `source "$RUN/env"` done and `$VB doctor "$RUN"` all `ok`.
-- `VB=.claude/skills/verify-butler/scripts/vb`, run from the repo root `/home/satoshi/src/butler`.
+- `VB=.claude/skills/verify-butler/scripts/vb`, run from the repo root.
 - You are inside herdr. The operator's live butler (agent `butler`) and its `state/` are never touched.
 
 ## Driving conventions
