@@ -18,6 +18,7 @@ spec = importlib.util.spec_from_loader(loader.name, loader)
 task = importlib.util.module_from_spec(spec)
 sys.modules[spec.name] = task
 loader.exec_module(task)
+REAL_RUN = task.subprocess.run
 
 
 class TaskTest(unittest.TestCase):
@@ -86,6 +87,64 @@ class SendTests(TaskTest):
         with self.assertRaises(task.HerdrError):
             self.send(task_id, fail_after_report)
         self.assertEqual(task.load(self.db, task_id).report, "new report")
+
+
+class FailedStartTests(TaskTest):
+    def git(self, *args):
+        return REAL_RUN(["git", "-C", str(self.root), *args], check=True,
+                        capture_output=True, text=True).stdout.strip()
+
+    def failed_start(self, commit):
+        self.git("init", "-b", "main")
+        self.git("config", "user.name", "Test")
+        self.git("config", "user.email", "test@example.invalid")
+        (self.root / "initial.txt").write_text("initial\n")
+        self.git("add", "initial.txt")
+        self.git("commit", "-m", "initial")
+        worktree = self.root / "worker"
+        branch = "butler/0001-startup"
+
+        def fake_herdr(*args):
+            if args[:2] == ("worktree", "create"):
+                self.git("worktree", "add", "-b", branch, str(worktree))
+                return {"root_pane": {"pane_id": "w999:p1", "tab_id": "w999:t1"},
+                        "worktree": {"path": str(worktree)},
+                        "workspace": {"workspace_id": "w999"}}
+            if args[:2] == ("agent", "start"):
+                (worktree / "worker.txt").write_text("completed worker output\n")
+                if commit:
+                    self.git("-C", str(worktree), "add", "worker.txt")
+                    self.git("-C", str(worktree), "commit", "-m", "worker output")
+                raise task.HerdrError("timeout", "worker did not become idle in time")
+            if args[:2] == ("agent", "rename"):
+                raise task.HerdrError("agent_not_found", "worker exited before rename")
+            if args == ("workspace", "close", "w999"):
+                return {}
+            self.fail(f"unexpected herdr call: {args}")
+
+        def only_fixture_git(argv, **kwargs):
+            self.assertEqual(argv[:3], ["git", "-C", str(self.root)])
+            return REAL_RUN(argv, **kwargs)
+
+        args = argparse.Namespace(cwd=str(self.root), title="startup", agent="claude",
+                                  no_worktree=False)
+        with patch.object(task.sys, "stdin", io.StringIO("do work")), \
+                patch.object(task, "git_toplevel", return_value=str(self.root)), \
+                patch.object(task, "commit_dirs", return_value=[]), \
+                patch.object(task, "herdr", side_effect=fake_herdr), \
+                patch.object(task.subprocess, "run", side_effect=only_fixture_git):
+            with self.assertRaises(SystemExit):
+                task.cmd_start(args)
+        return worktree, branch
+
+    def test_failed_rename_keeps_uncommitted_worker_output(self):
+        worktree, _ = self.failed_start(commit=False)
+        self.assertTrue((worktree / "worker.txt").is_file())
+
+    def test_failed_rename_keeps_committed_worker_branch(self):
+        _, branch = self.failed_start(commit=True)
+        self.assertIn(branch, self.git("branch", "--list", branch))
+        self.assertEqual(self.git("show", f"{branch}:worker.txt"), "completed worker output")
 
 
 if __name__ == "__main__":

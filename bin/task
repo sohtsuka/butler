@@ -263,8 +263,12 @@ def cmd_start(args: argparse.Namespace) -> None:
                 raise
     except HerdrError as e:
         db.execute("UPDATE tasks SET closed_at = ? WHERE id = ?", (now(), task_id))
-        close_herdr(load(db, task_id), remove_worktree=True, delete_branch=True)
-        sys.exit(f"task start: {e}; task {label} closed")
+        # A readiness timeout or failed rename can follow real work, including commits.
+        # Keep the worktree and branch for inspection, just as a normal close does.
+        task = load(db, task_id)
+        close_herdr(task, remove_worktree=False)
+        kept = f"; worktree kept: {task.worktree_path}" if task.worktree_path else ""
+        sys.exit(f"task start: {e}; task {label} closed{kept}")
     print(label)
 
 
@@ -426,7 +430,7 @@ def cmd_focus(args: argparse.Namespace) -> None:
     herdr("agent", "focus", live_pane(load(connect(), args.id)))
 
 
-def close_herdr(task: Task, remove_worktree: bool, delete_branch: bool = False) -> None:
+def close_herdr(task: Task, remove_worktree: bool) -> None:
     target = ("workspace", task.workspace_id) if task.workspace_id else ("tab", task.tab_id)
     if target[1]:
         try:
@@ -439,8 +443,6 @@ def close_herdr(task: Task, remove_worktree: bool, delete_branch: bool = False) 
             ["git", "-C", task.repo_root, "worktree", "remove", "--force", task.worktree_path],
             check=True,
         )
-    if delete_branch and task.repo_root and task.branch:
-        subprocess.run(["git", "-C", task.repo_root, "branch", "-D", task.branch], capture_output=True)
 
 
 def cmd_close(args: argparse.Namespace) -> None:
