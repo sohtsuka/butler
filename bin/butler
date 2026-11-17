@@ -47,6 +47,9 @@ def own_pane() -> str | None:
     # claude needs the terminal itself, which a pipe or a redirect means we do not hold.
     if not pane or not all(s.isatty() for s in (sys.stdin, sys.stdout, sys.stderr)):
         return None
+    # An agent of any kind keeps its name and process while suspended, unseen by the check below.
+    if herdr("agent", "get", pane)[0] == 0:
+        return None
     code, info = herdr("pane", "process-info", "--pane", pane)
     if code:
         return None
