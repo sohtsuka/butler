@@ -4,7 +4,7 @@ A task is one unit of delegated work. `task start` takes a brief on stdin and st
 
 ## Sub-features
 
-- `start-plain` starts a worker in a new tab of the current workspace for a non-git dir, or with `--no-worktree`.
+- `start-plain` starts a worker in a new tab of the run's workspace (`$HERDR_WORKSPACE_ID`) for a non-git dir, or with `--no-worktree`.
 - `start-worktree` starts a worker in a new worktree workspace on branch `butler/<id>-<slug>` when `--cwd` is in a git repo.
 - `wait-reported` returns `reported` once the worker's report is in the DB.
 - `show` prints the record, the brief and the report.
@@ -22,7 +22,7 @@ Preconditions:
 
 - Baseline from the README. `$FIXTURE_PLAIN` is empty, and `$FIXTURE_GIT` has exactly one commit, `init`.
 
-- **Start in a plain dir.** Run `$VB run "$RUN" lc-start-plain -- task start --title "Write marker" --cwd "$FIXTURE_PLAIN" --no-worktree` with stdin `Goal: create marker.txt in your working directory containing exactly the line "verified by vb".`. It exits 0 and prints `0001`. `herdr agent list` shows `$BUTLER_NAME-0001` in a new tab of `$HERDR_WORKSPACE_ID`.
+- **Start in a plain dir.** Run `$VB run "$RUN" lc-start-plain -- task start --title "Write marker" --cwd "$FIXTURE_PLAIN" --no-worktree` with stdin `Goal: create marker.txt in your working directory containing exactly the line "verified by vb".`. It exits 0 and prints `0001`. `herdr agent list` shows `$BUTLER_NAME-0001` in a new tab of the run's workspace `$HERDR_WORKSPACE_ID`, not the caller's.
 - **Wait.** Run `$VB run "$RUN" lc-wait-plain -- task wait 1 --timeout 300`. It prints `reported`, observed in about 10 to 30s.
 - **Second view.** Run `$VB run "$RUN" lc-show-plain -- task show 1` and `$VB run "$RUN" lc-marker -- cat "$FIXTURE_PLAIN/marker.txt"`. `show` reports `state: reported` with a `--- report ---` section, and the file prints `verified by vb`.
 - **Start in a worktree.** Run `$VB run "$RUN" lc-start-wt -- task start --title "Add hello" --cwd "$FIXTURE_GIT"` with stdin `Goal: add hello.txt containing "hello" and commit it with message "add hello".`. It prints `0002`. If stderr says `blocked at startup`, peek with `task peek 2`. When it shows the folder-trust dialog, answer it with `$VB run "$RUN" lc-trust -- task keys 2 down enter` (see Gotchas).

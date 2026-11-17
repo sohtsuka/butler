@@ -34,6 +34,6 @@ Preconditions:
 
 - A finished butler turn shows `done` (sometimes `idle`), and `vb settle` counts both as quiet. The quiet window must outlast the gap between the butler handing off and the waiter waking it. 20s covered a one-file task: hand-off, wake and summary all came within about 40s. Raise it for longer briefs. `settle` gives up after 600s by default (4th argument).
 - After its summary the butler may ask whether to close the task. Claude Code can show a greyed suggested reply in the input box. It is not typed, so do not submit it.
-- The butler's tab is in your workspace, and `bin/butler` focuses it. `vb butler` refocuses your pane, but a human watching will see it flash.
+- The butler's tab is in the run's dedicated workspace, and `bin/butler` focuses it. `vb butler` refocuses your pane, but a human watching will see the view jump to the run workspace and back.
 - A session killed before its first turn has no transcript, so the next launch uses `--session-id` again instead of `--resume`. Prompt it once before testing resume.
 - Compaction itself cannot be forced from outside. `hook` proves the re-injected text, and `resume` proves the matcher path with `startup|resume`.
