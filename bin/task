@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Task CLI for the butler: start, watch and close herdr-hosted Claude workers."""
+"""Task CLI for the butler: start, watch and close herdr-hosted Claude or Codex workers."""
 
 from __future__ import annotations
 
@@ -25,6 +25,8 @@ START_TIMEOUT_MS = "10000"
 # herdr agent names are global, so each butler instance namespaces its agents with this.
 NAME = os.environ.get("BUTLER_NAME", "butler")
 
+AGENTS = ("claude", "codex")
+
 LiveStatus = Literal["working", "blocked", "idle", "done", "unknown", "gone"]
 State = Literal["closed", "reported", "working", "blocked", "idle", "done", "unknown", "gone"]
 
@@ -43,9 +45,12 @@ CREATE TABLE IF NOT EXISTS tasks (
   report TEXT,
   created_at TEXT NOT NULL,
   reported_at TEXT,
-  closed_at TEXT
+  closed_at TEXT,
+  agent TEXT NOT NULL DEFAULT 'claude'
 );
 """
+# Columns added after the first release, for DBs created before them.
+MIGRATIONS = {"agent": "ALTER TABLE tasks ADD COLUMN agent TEXT NOT NULL DEFAULT 'claude'"}
 
 
 @dataclass(frozen=True)
@@ -64,6 +69,7 @@ class Task:
     created_at: str
     reported_at: str | None
     closed_at: str | None
+    agent: str = "claude"
 
     @property
     def label(self) -> str:
@@ -105,6 +111,14 @@ def connect() -> sqlite3.Connection:
         except sqlite3.OperationalError:
             time.sleep(0.1)
     db.executescript(SCHEMA)
+    have = {row["name"] for row in db.execute("PRAGMA table_info(tasks)")}
+    for column, sql in MIGRATIONS.items():
+        if column not in have:
+            try:
+                db.execute(sql)
+            except sqlite3.OperationalError as e:
+                if "duplicate column" not in str(e):  # a racing first open already added it
+                    raise
     return db
 
 
@@ -160,6 +174,17 @@ def kickoff(task_id: int) -> str:
     )
 
 
+def agent_argv(agent: str, name: str, task_id: int) -> list[str]:
+    """What follows `--` in `herdr agent start`: the agent CLI's own flags, then the kickoff.
+
+    The kickoff rides in argv for both, so it survives a startup dialog (folder trust)."""
+    if agent == "claude":
+        return ["--name", name, kickoff(task_id)]
+    # Codex's workspace-write sandbox only lets it write inside its cwd, but `task report` writes
+    # the butler's DB. --add-dir makes the state dir writable too, so reporting needs no approval.
+    return ["--sandbox", "workspace-write", "--add-dir", str(DB_PATH.parent), kickoff(task_id)]
+
+
 def cmd_start(args: argparse.Namespace) -> None:
     brief = sys.stdin.read()
     if not brief.strip():
@@ -171,8 +196,8 @@ def cmd_start(args: argparse.Namespace) -> None:
 
     db = connect()
     task_id = db.execute(
-        "INSERT INTO tasks (title, cwd, repo_root, brief, created_at) VALUES (?, ?, ?, ?, ?)",
-        (args.title, str(cwd), repo_root, brief, now()),
+        "INSERT INTO tasks (title, cwd, repo_root, brief, created_at, agent) VALUES (?, ?, ?, ?, ?, ?)",
+        (args.title, str(cwd), repo_root, brief, now(), args.agent),
     ).lastrowid
     label = f"{task_id:04d}"
     name = f"{NAME}-{label}"
@@ -193,14 +218,14 @@ def cmd_start(args: argparse.Namespace) -> None:
             " WHERE id = ?",
             (*ids, pane["tab_id"], pane["pane_id"], task_id),
         )
-        # The kickoff rides in claude's argv, so it survives a startup dialog (folder trust):
-        # claude runs it once the dialog is answered, while `agent prompt` is refused when blocked.
-        # With a prompt in argv, `agent start` only reports ready after the first turn ends, and on
-        # timeout it drops the name while claude keeps working. Rename to reclaim it; that fails,
-        # and so fails the start, only if no agent came up in the pane.
+        # The kickoff rides in the agent's argv, so it survives a startup dialog (folder trust):
+        # the agent runs it once the dialog is answered, while `agent prompt` is refused when
+        # blocked. With a prompt in argv, `agent start` only reports ready after the first turn
+        # ends, and on timeout it drops the name while the agent keeps working. Rename to reclaim
+        # it; that fails, and so fails the start, only if no agent came up in the pane.
         try:
-            herdr("agent", "start", name, "--kind", "claude", "--pane", pane["pane_id"],
-                  "--timeout", START_TIMEOUT_MS, "--", "--name", name, kickoff(task_id))
+            herdr("agent", "start", name, "--kind", args.agent, "--pane", pane["pane_id"],
+                  "--timeout", START_TIMEOUT_MS, "--", *agent_argv(args.agent, name, task_id))
         except HerdrError as e:
             if e.code == "timeout":
                 herdr("agent", "rename", pane["pane_id"], name)
@@ -286,14 +311,14 @@ def cmd_list(args: argparse.Namespace) -> None:
         return
     width = max(len(t.title) for t, _ in rows)
     for t, state in rows:
-        print(f"{t.label}  {state:<9}  {t.title:<{width}}  {where(t)}")
+        print(f"{t.label}  {state:<9}  {t.agent:<6}  {t.title:<{width}}  {where(t)}")
 
 
 def hook_block(rows: list[tuple[Task, State]]) -> str:
     if not rows:
         return "[butler] No open tasks. State lives in bin/task; trust `bin/task list` over memory."
     lines = ["[butler] Open tasks (from bin/task; trust this over memory):"]
-    lines += [f"- {t.label} {state}: {t.title} ({where(t)})" for t, state in rows]
+    lines += [f"- {t.label} {state} [{t.agent}]: {t.title} ({where(t)})" for t, state in rows]
     rearm = [t.label for t, state in rows if state not in ("reported", "gone", "blocked")]
     blocked = [t.label for t, state in rows if state == "blocked"]
     if rearm:
@@ -314,6 +339,7 @@ def cmd_show(args: argparse.Namespace) -> None:
     print(f"id:        {t.label}")
     print(f"state:     {derive_state(t)}")
     print(f"title:     {t.title}")
+    print(f"agent:     {t.agent}")
     for name in ("cwd", "repo_root", "worktree_path", "branch", "workspace_id", "tab_id",
                  "pane_id", "created_at", "reported_at", "closed_at"):
         if (value := getattr(t, name)) is not None:
@@ -399,6 +425,7 @@ def main() -> None:
     s.add_argument("--title", required=True)
     s.add_argument("--cwd", required=True)
     s.add_argument("--no-worktree", action="store_true")
+    s.add_argument("--agent", choices=AGENTS, default="claude", help="worker CLI (default: claude)")
     s.set_defaults(fn=cmd_start)
 
     for name, fn in (("brief", cmd_brief), ("report", cmd_report), ("show", cmd_show),

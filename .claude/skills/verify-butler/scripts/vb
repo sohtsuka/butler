@@ -70,7 +70,7 @@ cmd_doctor() {
   check "task CLI is the run copy" '[[ "$(command -v task)" == "$RUN_DIR/app/bin/task" ]]'
   check "fixture-git has a commit" 'git -C "$FIXTURE_GIT" rev-parse HEAD'
   check "agent namespace is not the live butler" '[[ "$BUTLER_NAME" != butler ]]'
-  echo "info  herdr $(herdr --version | cut -d" " -f2), $(claude --version)"
+  echo "info  herdr $(herdr --version | cut -d" " -f2), $(claude --version), $(codex --version 2>/dev/null || echo "codex missing")"
   echo "info  run workspace=${HERDR_WORKSPACE_ID:-none} (caller: ${CALLER_WORKSPACE_ID:-none})"
   echo "info  BUTLER_NAME=$BUTLER_NAME  db=$RUN_DIR/app/state/butler.db"
   echo "info  run agents: $(herdr agent list | jq -r --arg n "$BUTLER_NAME" '[.result.agents[] | select((.name // "") | startswith($n)) | "\(.name)=\(.agent_status)"] | join(" ")')"

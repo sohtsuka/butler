@@ -1,6 +1,6 @@
 # butler
 
-人間と話してタスクを管理するだけの、常駐 Claude Code エージェント「butler（執事）」です。butler 自身は作業をしません。実作業はすべて、butler が [herdr](https://herdr.dev) 経由で起動する新しい worker（Claude Code エージェント）が行います。
+人間と話してタスクを管理するだけの、常駐 Claude Code エージェント「butler（執事）」です。butler 自身は作業をしません。実作業はすべて、butler が [herdr](https://herdr.dev) 経由で起動する新しい worker（既定は Claude Code、指定すれば OpenAI Codex）が行います。
 
 ## 起動
 
@@ -27,7 +27,7 @@ bin/butler
 
 | コマンド | 内容 |
 | --- | --- |
-| `bin/task start --title T --cwd DIR [--no-worktree] < brief` | worker を起動し、タスク ID を表示 |
+| `bin/task start --title T --cwd DIR [--no-worktree] [--agent claude\|codex] < brief` | worker を起動し、タスク ID を表示 |
 | `bin/task wait <id> [--timeout S]` | `reported` / `blocked` / `stopped-without-report` / `gone` まで待つ |
 | `bin/task list [--all] [--for-hook]` | タスク一覧（`--all` で close 済みも表示） |
 | `bin/task show <id>` | 記録、ブリーフ、報告を表示 |
@@ -42,3 +42,11 @@ bin/butler
 
 - 信頼済みでないフォルダでは、worker が起動時のフォルダ信頼ダイアログで `blocked` になります。`bin/task focus` で答えるか、butler に `bin/task keys` で代わりに答えてもらいます。答えたあとは最初の指示がそのまま実行されます。
 - worktree の worker は、元のリポジトリ自体が Claude Code で信頼済みなら確認なしで起動します。親ディレクトリが信頼済みなだけでは足りません。
+
+## Codex worker
+
+`--agent codex` を付けると worker を Codex CLI で起動します（herdr の `agent start --kind codex`）。butler には「Codex でやって」と頼むか、Claude worker の成果に別の目でレビューがほしいときに使わせます。それ以外のコマンドは Claude worker と同じです。
+
+- Codex CLI がインストール済みでログイン済み（ChatGPT サブスクリプションか API キー）であることが前提です。
+- Codex は `--sandbox workspace-write` で起動し、`--add-dir state/` で butler の DB も書き込み可能にします。これで `bin/task report` を承認なしで実行できます。それ以外の操作で承認を求められると worker は `blocked` になり、Claude worker と同じく `bin/task peek` / `keys` / `focus` で対応します。
+- 承認ポリシー、モデルなどはそれ以外は `~/.codex/config.toml` の設定に従います。
