@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Task CLI for the butler: start, watch and close herdr-hosted Claude or Codex workers."""
+"""butler-task, the butler's task CLI: start, watch and close herdr-hosted Claude or Codex workers."""
 
 from __future__ import annotations
 
@@ -17,10 +17,16 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Literal
 
-REPO = Path(__file__).resolve().parent.parent
-# Shell-quoted at the source: it only ever goes into instructions a worker runs as a command.
-TASK_CMD = shlex.quote(str(REPO / "bin" / "task"))
-DB_PATH = REPO / "state" / "butler.db"
+try:
+    from butler import paths
+except ImportError:  # run as a plain script from a checkout
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+    from butler import paths
+
+# Set again by main() once --home is parsed. TASK_CMD is shell-quoted at the source: it only ever
+# goes into instructions a worker runs as a command.
+DB_PATH = paths.home() / "butler.db"
+TASK_CMD = paths.task_cmd(DB_PATH.parent)
 POLL_SECONDS = 3.0
 IDLE_POLLS_WITHOUT_WORKING = 5
 START_TIMEOUT_MS = "10000"
@@ -295,7 +301,7 @@ def cmd_start(args: argparse.Namespace) -> None:
             if e.code == "timeout":
                 herdr("agent", "rename", pane["pane_id"], name)
             elif e.code == "agent_not_ready":
-                print(f"{label} is blocked at startup; see `bin/task peek {label}`", file=sys.stderr)
+                print(f"{label} is blocked at startup; see `butler-task peek {label}`", file=sys.stderr)
             else:
                 raise
     except HerdrError as e:
@@ -394,20 +400,20 @@ def cmd_list(args: argparse.Namespace) -> None:
 
 def hook_block(rows: list[tuple[Task, State]]) -> str:
     if not rows:
-        return "[butler] No open tasks. State lives in bin/task; trust `bin/task list` over memory."
-    lines = ["[butler] Open tasks (from bin/task; trust this over memory):"]
+        return "[butler] No open tasks. State lives in butler-task; trust `butler-task list` over memory."
+    lines = ["[butler] Open tasks (from butler-task; trust this over memory):"]
     lines += [f"- {t.label} {state} [{t.agent}]: {t.title} ({where(t)})" for t, state in rows]
     rearm = [t.label for t, state in rows if state not in ("reported", "gone", "blocked")]
     blocked = [t.label for t, state in rows if state == "blocked"]
     if rearm:
         lines.append(
             "Re-arm a waiter now for each of these, one Bash call each with run_in_background: true: "
-            + ", ".join(f"`bin/task wait {i}`" for i in rearm)
+            + ", ".join(f"`butler-task wait {i}`" for i in rearm)
         )
     if blocked:
         lines.append(
-            "Blocked on a question: " + ", ".join(blocked) + ". Tell the human (see `bin/task peek <id>`);"
-            " re-arm `bin/task wait <id>` only after it has been answered."
+            "Blocked on a question: " + ", ".join(blocked) + ". Tell the human (see `butler-task peek <id>`);"
+            " re-arm `butler-task wait <id>` only after it has been answered."
         )
     return "\n".join(lines)
 
@@ -461,7 +467,7 @@ def cmd_send(args: argparse.Namespace) -> None:
         if e.code != "agent_blocked":
             raise
         sys.exit(f"task {task.label} is at a dialog, so text is refused. Answer it with "
-                 f"`bin/task keys {task.label} <key>...` (e.g. down enter, esc) or `bin/task focus`.")
+                 f"`butler-task keys {task.label} <key>...` (e.g. down enter, esc) or `butler-task focus`.")
     print(f"sent to task {task.label}")
 
 
@@ -554,7 +560,9 @@ def cmd_timeline(args: argparse.Namespace) -> None:
 
 
 def main() -> None:
-    p = argparse.ArgumentParser(prog="task")
+    p = argparse.ArgumentParser(prog="butler-task")
+    p.add_argument("--home", help="the butler's state directory (default: $BUTLER_HOME, else "
+                   "$XDG_STATE_HOME/butler)")
     sub = p.add_subparsers(dest="cmd", required=True)
 
     s = sub.add_parser("start", help="start a worker; brief on stdin")
@@ -607,6 +615,11 @@ def main() -> None:
     s.set_defaults(fn=cmd_close)
 
     args = p.parse_args()
+    if args.home:
+        global DB_PATH, TASK_CMD
+        os.environ["BUTLER_HOME"] = args.home
+        DB_PATH = paths.home() / "butler.db"
+        TASK_CMD = paths.task_cmd(DB_PATH.parent)
     try:
         args.fn(args)
     except HerdrError as e:

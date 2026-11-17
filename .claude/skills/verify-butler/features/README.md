@@ -6,21 +6,21 @@ This directory is the maintained source for verifying butler's user-facing behav
 
 - A fresh run from `$VB launch`, with `source "$RUN/env"` done and `$VB doctor "$RUN"` all `ok`.
 - `VB=.claude/skills/verify-butler/scripts/vb`, run from the repo root.
-- You are inside herdr. The operator's live butler (agent `butler`) and its `state/` are never touched.
+- You are inside herdr. The operator's live butler (agent `butler`) and its `BUTLER_HOME` are never touched.
 
 ## Driving conventions
 
-- Every `bin/task` call goes through `$VB run "$RUN" <artifact-name> -- task ...` so it is recorded.
+- Every `butler-task` call goes through `$VB run "$RUN" <artifact-name> -- butler-task ...` so it is recorded.
 - Every conversation with the run's butler goes through `$VB say`, and waits on background wakes through `$VB settle`.
-- Task ids in a fresh run start at `1`. `bin/task` prints them zero-padded (`0001`) and accepts either form.
+- Task ids in a fresh run start at `1`. `butler-task` prints them zero-padded (`0001`) and accepts either form.
 - Peek before pressing keys. Press only what the step names.
 - Run `$VB cleanup "$RUN"` at the end of every run, passing or failing.
 
 ## Proof and skip reporting
 
 - CLI proof is the `<name>.log` from `vb run`: command, stdout, stderr and exit code.
-- A task is proven by its `task wait` outcome, plus `task show` with the report, plus the side effect in the fixture.
-- Agent proof is a `<name>.screen.txt`, plus a second view of what it did (`task list --all`, the fixture).
+- A task is proven by its `butler-task wait` outcome, plus `butler-task show` with the report, plus the side effect in the fixture.
+- Agent proof is a `<name>.screen.txt`, plus a second view of what it did (`butler-task list --all`, the fixture).
 - Record which feature ID each artifact proves.
 - Report an unreachable step with the command you tried and the unmet precondition. Do not report it as verified through a different entry point.
 

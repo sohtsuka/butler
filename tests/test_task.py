@@ -2,8 +2,6 @@
 
 import argparse
 import contextlib
-import importlib.machinery
-import importlib.util
 import io
 from pathlib import Path
 import re
@@ -14,12 +12,8 @@ from unittest.mock import patch
 import sys
 
 
-SCRIPT = Path(__file__).resolve().parents[1] / "bin" / "task"
-loader = importlib.machinery.SourceFileLoader("task_under_test", str(SCRIPT))
-spec = importlib.util.spec_from_loader(loader.name, loader)
-task = importlib.util.module_from_spec(spec)
-sys.modules[spec.name] = task
-loader.exec_module(task)
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
+from butler import task  # noqa: E402
 REAL_RUN = task.subprocess.run
 
 

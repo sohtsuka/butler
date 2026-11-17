@@ -1,13 +1,13 @@
 {
   "permissions": {
-    "allow": ["Bash(bin/task:*)", "Bash(herdr:*)", "Read"],
+    "allow": ["Bash(butler-task:*)", "Bash(herdr:*)", "Read"],
     "deny": ["Edit", "Write", "NotebookEdit"]
   },
   "hooks": {
     "SessionStart": [
       {
         "matcher": "startup|resume|compact",
-        "hooks": [{ "type": "command", "command": "\"$CLAUDE_PROJECT_DIR\"/bin/task list --for-hook" }]
+        "hooks": [{ "type": "command", "command": "butler-task list --for-hook" }]
       }
     ]
   }
