@@ -11,7 +11,7 @@ import sqlite3
 import subprocess
 import sys
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, fields
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Literal
@@ -76,6 +76,16 @@ class Task:
         return f"{self.id:04d}"
 
 
+def task_from_row(row: sqlite3.Row) -> Task:
+    """The one way a `tasks` row becomes a Task, dropping columns this code does not know.
+
+    MIGRATIONS covers an old DB read by new code; this covers the mirror image, a new DB read by
+    old code. An upgrade migrates the DB under the processes already running on it, so a column
+    added for a later release must not kill the `task wait` watching a worker right now."""
+    known = {f.name for f in fields(Task)}
+    return Task(**{name: value for name, value in dict(row).items() if name in known})
+
+
 class HerdrError(Exception):
     def __init__(self, code: str, message: str):
         super().__init__(f"herdr {code}: {message}")
@@ -130,7 +140,7 @@ def load(db: sqlite3.Connection, task_id: int) -> Task:
     row = db.execute("SELECT * FROM tasks WHERE id = ?", (task_id,)).fetchone()
     if row is None:
         sys.exit(f"task {task_id:04d} not found")
-    return Task(**dict(row))
+    return task_from_row(row)
 
 
 def live_status(pane_id: str | None) -> LiveStatus:
@@ -311,7 +321,7 @@ def _wait_outcome(state: State, saw_working: bool, stopped_polls: int) -> str | 
 
 def all_tasks(db: sqlite3.Connection, include_closed: bool) -> list[Task]:
     sql = "SELECT * FROM tasks" + ("" if include_closed else " WHERE closed_at IS NULL") + " ORDER BY id"
-    return [Task(**dict(r)) for r in db.execute(sql)]
+    return [task_from_row(r) for r in db.execute(sql)]
 
 
 def where(task: Task) -> str:
