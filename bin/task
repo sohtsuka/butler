@@ -50,7 +50,20 @@ CREATE TABLE IF NOT EXISTS tasks (
   closed_at TEXT,
   agent TEXT NOT NULL DEFAULT 'claude'
 );
+-- What happened to each task, appended and never updated. `tasks` holds only the present (a
+-- follow-up clears the report, live states are not stored); this keeps the history a timeline
+-- needs. Live states (blocked, unblocked, stopped, gone) are only seen by a process polling herdr,
+-- so they are recorded when `task wait` or `task keys` sees them.
+CREATE TABLE IF NOT EXISTS events (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  task_id INTEGER NOT NULL REFERENCES tasks(id),
+  at TEXT NOT NULL,
+  kind TEXT NOT NULL,
+  detail TEXT
+);
+CREATE INDEX IF NOT EXISTS events_task ON events(task_id, id);
 """
+EVENT_KINDS = ("started", "followup", "reported", "blocked", "unblocked", "stopped", "gone", "closed")
 # Columns added after the first release, for DBs created before them.
 MIGRATIONS = {"agent": "ALTER TABLE tasks ADD COLUMN agent TEXT NOT NULL DEFAULT 'claude'"}
 
@@ -145,6 +158,27 @@ def load(db: sqlite3.Connection, task_id: int) -> Task:
     return task_from_row(row)
 
 
+def record(db: sqlite3.Connection, task_id: int, kind: str, detail: str | None = None) -> int:
+    assert kind in EVENT_KINDS, kind
+    return db.execute(
+        "INSERT INTO events (task_id, at, kind, detail) VALUES (?, ?, ?, ?)",
+        (task_id, now(), kind, detail),
+    ).lastrowid
+
+
+def record_seen(db: sqlite3.Connection, task_id: int, kind: str) -> None:
+    """Record a live state a poller saw, once: several waiters (a re-armed one, a stale one) can
+    see the same state, so skip it when it is already the task's latest event. `unblocked` only
+    means something right after `blocked`."""
+    row = db.execute(
+        "SELECT kind FROM events WHERE task_id = ? ORDER BY id DESC LIMIT 1", (task_id,)
+    ).fetchone()
+    latest = row["kind"] if row else None
+    if latest == kind or (kind == "unblocked" and latest != "blocked"):
+        return
+    record(db, task_id, kind)
+
+
 def live_status(pane_id: str | None) -> LiveStatus:
     if pane_id is None:
         return "gone"
@@ -227,6 +261,7 @@ def cmd_start(args: argparse.Namespace) -> None:
         "INSERT INTO tasks (title, cwd, repo_root, brief, created_at, agent) VALUES (?, ?, ?, ?, ?, ?)",
         (args.title, str(cwd), repo_root, brief, now(), args.agent),
     ).lastrowid
+    record(db, task_id, "started", args.agent)
     label = f"{task_id:04d}"
     name = f"{NAME}-{label}"
     try:
@@ -269,6 +304,7 @@ def cmd_start(args: argparse.Namespace) -> None:
         task = load(db, task_id)
         close_herdr(task, remove_worktree=False)
         db.execute("UPDATE tasks SET closed_at = ? WHERE id = ?", (now(), task_id))
+        record(db, task_id, "closed", f"start failed: {e}")
         kept = f"; worktree kept: {task.worktree_path}" if task.worktree_path else ""
         sys.exit(f"task start: {e}; task {label} closed{kept}")
     print(label)
@@ -289,6 +325,7 @@ def cmd_report(args: argparse.Namespace) -> None:
     db.execute(
         "UPDATE tasks SET report = ?, reported_at = ? WHERE id = ?", (report, now(), task.id)
     )
+    record(db, task.id, "reported", report)
     print(f"report saved for task {task.label}")
 
 
@@ -301,6 +338,9 @@ def cmd_wait(args: argparse.Namespace) -> None:
         state = derive_state(load(db, args.id))
         if state == "working":
             saw_working = True
+            record_seen(db, args.id, "unblocked")
+        elif state == "blocked":
+            record_seen(db, args.id, "blocked")
         stopped_polls = stopped_polls + 1 if state in ("idle", "done", "unknown") else 0
         outcome = _wait_outcome(state, saw_working, stopped_polls)
         if outcome:
@@ -309,6 +349,10 @@ def cmd_wait(args: argparse.Namespace) -> None:
             print("timeout")
             return
         time.sleep(POLL_SECONDS)
+    if outcome == "stopped-without-report":
+        record_seen(db, args.id, "stopped")
+    elif outcome == "gone":
+        record_seen(db, args.id, "gone")
     print(outcome)
     sound = "request" if outcome == "blocked" else "done"
     try:
@@ -403,6 +447,8 @@ def cmd_send(args: argparse.Namespace) -> None:
     # Clear before prompting: the worker can report while `agent prompt` is in flight, and a
     # clear afterwards would erase that report with the worker none the wiser.
     db.execute("UPDATE tasks SET report = NULL, reported_at = NULL WHERE id = ?", (task.id,))
+    # Recorded before the prompt for the same reason, so it sorts before any report it causes.
+    event = record(db, task.id, "followup", args.text)
     try:
         herdr("agent", "prompt", pane, text)
     except HerdrError as e:
@@ -411,6 +457,7 @@ def cmd_send(args: argparse.Namespace) -> None:
             "UPDATE tasks SET report = ?, reported_at = ? WHERE id = ? AND report IS NULL",
             (task.report, task.reported_at, task.id),
         )
+        db.execute("DELETE FROM events WHERE id = ?", (event,))
         if e.code != "agent_blocked":
             raise
         sys.exit(f"task {task.label} is at a dialog, so text is refused. Answer it with "
@@ -420,11 +467,14 @@ def cmd_send(args: argparse.Namespace) -> None:
 
 def cmd_keys(args: argparse.Namespace) -> None:
     """Prints the worker's state once it leaves `blocked` (or after 5s), so a waiter armed next is fresh."""
-    pane = live_pane(load(connect(), args.id))
+    db = connect()
+    pane = live_pane(load(db, args.id))
     herdr("agent", "send-keys", pane, *args.keys)
     deadline = time.monotonic() + 5
     while (state := live_status(pane)) == "blocked" and time.monotonic() < deadline:
         time.sleep(0.5)
+    if state != "blocked":
+        record_seen(db, args.id, "unblocked")
     print(f"sent keys to task {args.id:04d}; now {state}")
 
 
@@ -453,8 +503,54 @@ def cmd_close(args: argparse.Namespace) -> None:
     close_herdr(task, args.remove_worktree)
     if not task.closed_at:
         db.execute("UPDATE tasks SET closed_at = ? WHERE id = ?", (now(), task.id))
+        record(db, task.id, "closed")
     kept = task.worktree_path and Path(task.worktree_path).exists()
     print(f"closed task {task.label}" + (f" (worktree kept: {task.worktree_path})" if kept else ""))
+
+
+@dataclass(frozen=True)
+class Event:
+    task_id: int
+    at: str
+    kind: str
+    detail: str | None
+
+
+def task_events(db: sqlite3.Connection, t: Task) -> list[Event]:
+    """A task's events. A task from before the events table has none, so its timestamps stand in."""
+    rows = db.execute(
+        "SELECT task_id, at, kind, detail FROM events WHERE task_id = ? ORDER BY id", (t.id,)
+    ).fetchall()
+    if rows:
+        return [Event(**dict(r)) for r in rows]
+    stand_ins = [("started", t.created_at, t.agent), ("reported", t.reported_at, t.report),
+                 ("closed", t.closed_at, None)]
+    return [Event(t.id, at, kind, detail) for kind, at, detail in stand_ins if at]
+
+
+def local_time(at: str) -> str:
+    return datetime.fromisoformat(at).astimezone().strftime("%m-%d %H:%M:%S")
+
+
+def first_line(text: str | None, width: int = 60) -> str:
+    line = (text or "").strip().split("\n", 1)[0]
+    return line if len(line) <= width else line[: width - 1] + "…"
+
+
+def cmd_timeline(args: argparse.Namespace) -> None:
+    db = connect()
+    tasks = [load(db, args.id)] if args.id is not None else all_tasks(db, include_closed=args.all)
+    titles = {t.id: t.title for t in tasks}
+    events = sorted((e for t in tasks for e in task_events(db, t)), key=lambda e: e.at)
+    if args.limit:
+        events = events[-args.limit:]
+    if not events:
+        print("no events")
+        return
+    for e in events:
+        detail = first_line(e.detail)
+        print(f"{local_time(e.at)}  {e.task_id:04d}  {e.kind:<9}  {titles[e.task_id]}"
+              + (f"  | {detail}" if detail else ""))
 
 
 def main() -> None:
@@ -483,6 +579,12 @@ def main() -> None:
     s.add_argument("--all", action="store_true")
     s.add_argument("--for-hook", action="store_true")
     s.set_defaults(fn=cmd_list)
+
+    s = sub.add_parser("timeline", help="what happened to tasks, oldest first")
+    s.add_argument("id", type=int, nargs="?")
+    s.add_argument("--all", action="store_true", help="include closed tasks")
+    s.add_argument("--limit", type=int, help="only the last N events")
+    s.set_defaults(fn=cmd_timeline)
 
     s = sub.add_parser("peek")
     s.add_argument("id", type=int)

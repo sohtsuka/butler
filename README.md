@@ -24,6 +24,8 @@ bin/butler
 
 タスクの状態は `state/butler.db`（SQLite）にあります。状態は保存せず、`closed_at`、報告の有無、herdr 上の pane の状態から毎回導出します。
 
+現在の状態とは別に、起きたこと（起動、追加指示、報告、blocked とその解消、停止、close）を `events` 表に追記していきます。追加指示で消える前回の報告も、ここには残ります。blocked / 解消 / 停止は herdr を見ている `bin/task wait` と `bin/task keys` が記録するので、誰も wait していない間の変化は、次に wait したときの時刻で記録されます。
+
 ## コマンド
 
 | コマンド | 内容 |
@@ -32,6 +34,7 @@ bin/butler
 | `bin/task wait <id> [--timeout S]` | `reported` / `blocked` / `stopped-without-report` / `gone` まで待つ |
 | `bin/task list [--all] [--for-hook]` | タスク一覧（`--all` で close 済みも表示） |
 | `bin/task show <id>` | 記録、ブリーフ、報告を表示 |
+| `bin/task timeline [<id>] [--all] [--limit N]` | 起動、追加指示、各回の報告、blocked / 解消、close の履歴を時刻順に表示（`--all` で close 済みも） |
 | `bin/task peek <id> [--lines N]` | worker の画面の末尾を表示 |
 | `bin/task send <id> TEXT` | 待機中の worker に追加の指示を送る（前回の報告はクリアされる） |
 | `bin/task keys <id> KEY...` | worker のダイアログにキーを送る（例: `down enter`、`esc`） |

@@ -40,6 +40,7 @@ EOF
 
 - `bin/task list [--all]`: open tasks with their live state. `--all` includes closed ones.
 - `bin/task show <id>`: the task's record, brief and report.
+- `bin/task timeline [<id>] [--all] [--limit N]`: what happened and when (started, follow-ups, each report, blocked/unblocked, closed). Use it when the human asks what happened, since when a task has been blocked, or what an earlier round reported.
 - `bin/task peek <id> [--lines N]`: the last lines of the worker's screen.
 - `bin/task send <id> "text"`: send a follow-up prompt to an idle worker, then re-arm `bin/task wait <id>`. It is refused while the worker sits at a dialog.
 - `bin/task keys <id> <key>...`: press keys at a worker's dialog to relay the human's answer, e.g. `down enter`, `enter`, `esc`. Peek first and press only what the human chose. Then re-arm the waiter.
