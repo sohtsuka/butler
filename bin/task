@@ -22,6 +22,8 @@ DB_PATH = REPO / "state" / "butler.db"
 POLL_SECONDS = 3.0
 IDLE_POLLS_WITHOUT_WORKING = 5
 START_TIMEOUT_MS = "10000"
+# herdr agent names are global, so each butler instance namespaces its agents with this.
+NAME = os.environ.get("BUTLER_NAME", "butler")
 
 LiveStatus = Literal["working", "blocked", "idle", "done", "unknown", "gone"]
 State = Literal["closed", "reported", "working", "blocked", "idle", "done", "unknown", "gone"]
@@ -173,7 +175,7 @@ def cmd_start(args: argparse.Namespace) -> None:
         (args.title, str(cwd), repo_root, brief, now()),
     ).lastrowid
     label = f"{task_id:04d}"
-    name = f"task-{label}"
+    name = f"{NAME}-{label}"
     try:
         if repo_root:
             branch = f"butler/{label}-{slugify(args.title)}"
