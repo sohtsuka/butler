@@ -6,6 +6,8 @@ import importlib.machinery
 import importlib.util
 import io
 from pathlib import Path
+import re
+import shlex
 import tempfile
 import unittest
 from unittest.mock import patch
@@ -156,6 +158,29 @@ class FailedStartTests(TaskTest):
     def test_successful_cleanup_closes_task(self):
         self.failed_start(commit=False)
         self.assertIsNotNone(task.load(self.db, 1).closed_at)
+
+
+class WorkerCommandTests(TaskTest):
+    """A repo path holding a space or a quote must still make instructions a worker can run."""
+
+    def setUp(self):
+        super().setUp()
+        self.task_bin = self.root / "operator's projects" / "butler" / "bin" / "task"
+        self.enterContext(patch.object(task, "TASK_CMD", shlex.quote(str(self.task_bin))))
+
+    def test_kickoff_commands_preserve_the_executable_path(self):
+        commands = re.findall(r"`([^`]+)`", task.kickoff(3))
+        self.assertEqual([shlex.split(command) for command in commands],
+                         [[str(self.task_bin), "brief", "3"],
+                          [str(self.task_bin), "report", "3"]])
+
+    def test_followup_report_command_preserves_the_executable_path(self):
+        task_id = self.seed()
+        with patch.object(task, "live_pane", return_value="w999:p1"), \
+                patch.object(task, "herdr", return_value={}) as herdr:
+            task.cmd_send(argparse.Namespace(id=task_id, text="follow up"))
+        command, = re.findall(r"`([^`]+)`", herdr.call_args.args[-1])
+        self.assertEqual(shlex.split(command), [str(self.task_bin), "report", str(task_id)])
 
 
 if __name__ == "__main__":
