@@ -24,7 +24,7 @@ Preconditions:
 - Baseline from the README.
 - No agent named `$BUTLER_NAME` (`$VB doctor` lists run agents).
 
-- **Launch.** Run `$VB butler-here "$RUN"`. `artifacts/butler-here.log` lists the same tab ids before and after `bin/butler`, and `agent get "$BUTLER_NAME"` reports `pane_id` equal to the shell pane the log names, with `agent_status` `idle` or `working`. The pane's screen shows `butler is starting in this pane (<pane>)`. `$RUN/app/state/butler-session-id` holds a uuid, and `state/butler-claim.log` does not exist.
+- **Launch.** Run `$VB butler-here "$RUN"`. `artifacts/butler-here.log` lists the same tab ids before and after `bin/butler`, and `agent get "$BUTLER_NAME"` reports `pane_id` equal to the shell pane the log names, with `agent_status` `idle` or `working`. The pane's screen shows `butler is starting in this pane (<pane>)`. `$RUN/app/state/butler-session-id` holds a uuid.
 - **Fallback.** With no `$BUTLER_NAME` alive, run `$VB butler "$RUN"` (its output is piped, so the takeover is refused). `artifacts/butler-launch.log` says `butler started in <pane> (<tab>), a new tab`, and that pane is in a tab that was not there before.
 - **Running, not duplicate.** Run `$VB butler "$RUN"` again. It prints `butler is running in <pane> (<tab>)`, focus stays where it was, and `herdr agent list` shows exactly one `$BUTLER_NAME`.
 - **Role.** Run `$VB say "$RUN" ag-role "あなたの役割は？短く答えて。"`. The screen shows a Japanese answer saying it manages tasks, delegates through `bin/task`, and does not edit files.

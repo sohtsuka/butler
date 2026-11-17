@@ -112,7 +112,7 @@ cmd_butler_here() {
     herdr tab list --workspace "$HERDR_WORKSPACE_ID" | jq -r '.result.tabs[].tab_id'; } >"$log"
   sleep 1   # let the pane's shell reach its prompt before typing at it
   herdr pane run "$pane" "bin/butler" >/dev/null
-  # bin/butler execs claude in that pane; a detached child names it once herdr sees it.
+  # bin/butler execs claude in that pane; a detached rename loop names it once herdr sees it.
   until herdr agent get "$BUTLER_NAME" >/dev/null 2>&1; do
     (( waited < 180 )) || { cat "$log" >&2; die "no agent named $BUTLER_NAME after ${waited}s"; }
     sleep 1; waited=$((waited + 1))
@@ -120,9 +120,7 @@ cmd_butler_here() {
   { echo "--- tabs after bin/butler"
     herdr tab list --workspace "$HERDR_WORKSPACE_ID" | jq -r '.result.tabs[].tab_id'
     echo "--- agent get $BUTLER_NAME"
-    herdr agent get "$BUTLER_NAME"
-    echo "--- claim log"
-    cat "$RUN_DIR/app/state/butler-claim.log" 2>/dev/null || echo "(none)"; } >>"$log"
+    herdr agent get "$BUTLER_NAME"; } >>"$log"
   cat "$log"
 }
 
