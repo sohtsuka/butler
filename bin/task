@@ -7,6 +7,7 @@ import argparse
 import json
 import os
 import re
+import shlex
 import sqlite3
 import subprocess
 import sys
@@ -17,7 +18,8 @@ from pathlib import Path
 from typing import Literal
 
 REPO = Path(__file__).resolve().parent.parent
-TASK_BIN = REPO / "bin" / "task"
+# Shell-quoted at the source: it only ever goes into instructions a worker runs as a command.
+TASK_CMD = shlex.quote(str(REPO / "bin" / "task"))
 DB_PATH = REPO / "state" / "butler.db"
 POLL_SECONDS = 3.0
 IDLE_POLLS_WITHOUT_WORKING = 5
@@ -177,9 +179,9 @@ def git_toplevel(cwd: Path) -> str | None:
 def kickoff(task_id: int) -> str:
     return (
         f"You are a worker for task {task_id:04d}. "
-        f"Run `{TASK_BIN} brief {task_id}` to read your brief, then do it. "
+        f"Run `{TASK_CMD} brief {task_id}` to read your brief, then do it. "
         f"When you finish, whether it worked or not, pipe a report into "
-        f"`{TASK_BIN} report {task_id}` (stdin, e.g. a heredoc) covering: outcome; "
+        f"`{TASK_CMD} report {task_id}` (stdin, e.g. a heredoc) covering: outcome; "
         f"what changed (files, branch, commits); how you verified it; open questions."
     )
 
@@ -262,9 +264,13 @@ def cmd_start(args: argparse.Namespace) -> None:
             else:
                 raise
     except HerdrError as e:
+        # A readiness timeout or failed rename can follow real work, including commits.
+        # Keep the worktree and branch for inspection, just as a normal close does.
+        task = load(db, task_id)
+        close_herdr(task, remove_worktree=False)
         db.execute("UPDATE tasks SET closed_at = ? WHERE id = ?", (now(), task_id))
-        close_herdr(load(db, task_id), remove_worktree=True, delete_branch=True)
-        sys.exit(f"task start: {e}; task {label} closed")
+        kept = f"; worktree kept: {task.worktree_path}" if task.worktree_path else ""
+        sys.exit(f"task start: {e}; task {label} closed{kept}")
     print(label)
 
 
@@ -392,15 +398,23 @@ def cmd_send(args: argparse.Namespace) -> None:
     """A follow-up opens a new round: the old report is cleared so `task wait` waits for the next."""
     db = connect()
     task = load(db, args.id)
-    text = f"{args.text}\n\nWhen you finish, pipe an updated report into `{TASK_BIN} report {task.id}`."
+    text = f"{args.text}\n\nWhen you finish, pipe an updated report into `{TASK_CMD} report {task.id}`."
+    pane = live_pane(task)
+    # Clear before prompting: the worker can report while `agent prompt` is in flight, and a
+    # clear afterwards would erase that report with the worker none the wiser.
+    db.execute("UPDATE tasks SET report = NULL, reported_at = NULL WHERE id = ?", (task.id,))
     try:
-        herdr("agent", "prompt", live_pane(task), text)
+        herdr("agent", "prompt", pane, text)
     except HerdrError as e:
+        # The prompt never landed, so put the old round back -- unless a report has since arrived.
+        db.execute(
+            "UPDATE tasks SET report = ?, reported_at = ? WHERE id = ? AND report IS NULL",
+            (task.report, task.reported_at, task.id),
+        )
         if e.code != "agent_blocked":
             raise
         sys.exit(f"task {task.label} is at a dialog, so text is refused. Answer it with "
                  f"`bin/task keys {task.label} <key>...` (e.g. down enter, esc) or `bin/task focus`.")
-    db.execute("UPDATE tasks SET report = NULL, reported_at = NULL WHERE id = ?", (task.id,))
     print(f"sent to task {task.label}")
 
 
@@ -418,7 +432,7 @@ def cmd_focus(args: argparse.Namespace) -> None:
     herdr("agent", "focus", live_pane(load(connect(), args.id)))
 
 
-def close_herdr(task: Task, remove_worktree: bool, delete_branch: bool = False) -> None:
+def close_herdr(task: Task, remove_worktree: bool) -> None:
     target = ("workspace", task.workspace_id) if task.workspace_id else ("tab", task.tab_id)
     if target[1]:
         try:
@@ -431,8 +445,6 @@ def close_herdr(task: Task, remove_worktree: bool, delete_branch: bool = False) 
             ["git", "-C", task.repo_root, "worktree", "remove", "--force", task.worktree_path],
             check=True,
         )
-    if delete_branch and task.repo_root and task.branch:
-        subprocess.run(["git", "-C", task.repo_root, "branch", "-D", task.branch], capture_output=True)
 
 
 def cmd_close(args: argparse.Namespace) -> None:
