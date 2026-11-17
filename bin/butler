@@ -1,0 +1,60 @@
+#!/usr/bin/env python3
+"""Start the butler agent in a new herdr tab, or focus it if it is already running."""
+
+import glob
+import json
+import os
+import subprocess
+import sys
+import uuid
+from pathlib import Path
+
+REPO = Path(__file__).resolve().parent.parent
+ID_FILE = REPO / "state" / "butler-session-id"
+
+
+def herdr(*args: str) -> tuple[int, dict]:
+    proc = subprocess.run(["herdr", *args], capture_output=True, text=True)
+    return proc.returncode, json.loads(proc.stdout if proc.returncode == 0 else proc.stderr)
+
+
+def session_args() -> list[str]:
+    if not ID_FILE.is_file() or not ID_FILE.read_text().strip():
+        ID_FILE.parent.mkdir(parents=True, exist_ok=True)
+        tmp = ID_FILE.with_name(f"{ID_FILE.name}.tmp.{os.getpid()}")
+        tmp.write_text(f"{uuid.uuid4()}\n")
+        tmp.rename(ID_FILE)
+    sid = ID_FILE.read_text().strip()
+    # A session killed before its first turn has no transcript and cannot be resumed.
+    resumable = glob.glob(str(Path.home() / ".claude" / "projects" / "*" / f"{sid}.jsonl"))
+    # Never --continue: it would pick up a developer's session in this repo.
+    return ["--resume", sid] if resumable else ["--session-id", sid]
+
+
+def main() -> None:
+    if herdr("agent", "get", "butler")[0] == 0:
+        sys.exit(herdr("agent", "focus", "butler")[0])
+
+    workspace = os.environ.get("HERDR_WORKSPACE_ID")
+    code, made = herdr("tab", "create", "--cwd", str(REPO), "--label", "butler", "--focus",
+                       *(["--workspace", workspace] if workspace else []))
+    if code:
+        sys.exit(f"butler: {made['error']['message']}")
+    pane, tab = made["result"]["root_pane"]["pane_id"], made["result"]["tab"]["tab_id"]
+
+    code, started = herdr(
+        "agent", "start", "butler", "--kind", "claude", "--pane", pane, "--",
+        *session_args(),
+        "--append-system-prompt-file", str(REPO / "butler" / "prompt.md"),
+        "--settings", str(REPO / "butler" / "settings.json"),
+    )
+    if code and started["error"]["code"] != "agent_not_ready":
+        herdr("tab", "close", tab)
+        sys.exit(f"butler: {started['error']['message']}")
+    if code:
+        print("butler is waiting on a startup dialog in its tab", file=sys.stderr)
+    print(f"butler started in {pane}")
+
+
+if __name__ == "__main__":
+    main()
