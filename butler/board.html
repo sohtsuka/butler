@@ -1,0 +1,268 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>butler board</title>
+<style>
+:root {
+  --bg: #f7f7f5; --panel: #ffffff; --text: #1f2328; --muted: #6b7280; --line: #e3e3df;
+  --working: #2f6fdb; --blocked: #d93f3f; --reported: #2e9a55; --stopped: #9aa0a6;
+  --followup: #8a5cf6; --new: #fff4c2;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #15171a; --panel: #1d2024; --text: #e6e6e3; --muted: #9aa0a6; --line: #30343a;
+    --working: #5b8fec; --blocked: #ef6161; --reported: #4cbb73; --stopped: #6b7178;
+    --followup: #a78bfa; --new: #3a3417;
+  }
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--text);
+  font: 14px/1.5 system-ui, -apple-system, "Hiragino Sans", "Noto Sans JP", sans-serif; }
+header { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; padding: 12px 16px;
+  border-bottom: 1px solid var(--line); background: var(--panel); position: sticky; top: 0; z-index: 2; }
+h1 { font-size: 16px; margin: 0 8px 0 0; }
+.controls { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin-left: auto; }
+button, select { font: inherit; color: inherit; background: var(--bg); border: 1px solid var(--line);
+  border-radius: 6px; padding: 3px 10px; cursor: pointer; }
+button.on { border-color: var(--working); }
+label { color: var(--muted); }
+main { display: grid; grid-template-columns: minmax(0, 1fr) 380px; gap: 16px; padding: 16px; }
+@media (max-width: 900px) { main { grid-template-columns: minmax(0, 1fr); } }
+section { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 12px; min-width: 0; }
+h2 { font-size: 13px; color: var(--muted); font-weight: 600; margin: 0 0 8px; }
+.summary { display: flex; flex-direction: column; gap: 6px; min-width: 240px; flex: 1; max-width: 520px; }
+.bar { display: flex; height: 10px; border-radius: 5px; overflow: hidden; background: var(--line); }
+.bar span { display: block; height: 100%; }
+.legend { display: flex; gap: 12px; flex-wrap: wrap; font-size: 12px; color: var(--muted); }
+.dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 4px; vertical-align: 0; }
+.s-working { background: var(--working); } .s-blocked { background: var(--blocked); }
+.s-reported { background: var(--reported); } .s-stopped { background: var(--stopped); }
+.lanes { display: grid; grid-template-columns: minmax(140px, 260px) minmax(0, 1fr); row-gap: 4px; align-items: center; }
+@media (max-width: 700px) {
+  .lanes { grid-template-columns: minmax(0, 1fr); }
+  .axis span:nth-child(2), .axis span:nth-child(4) { display: none; }
+}
+.axis { position: relative; height: 18px; font-size: 11px; color: var(--muted); }
+.axis span { position: absolute; transform: translateX(-50%); white-space: nowrap; }
+.who { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; padding-right: 8px; cursor: pointer; }
+.who small { color: var(--muted); margin-left: 4px; }
+.who.sel, .lane.sel { background: var(--bg); }
+.lane { position: relative; height: 22px; border-radius: 4px; cursor: pointer; }
+.lane::before { content: ""; position: absolute; left: 0; right: 0; top: 10px; height: 2px; background: var(--line); }
+.seg { position: absolute; top: 5px; height: 12px; border-radius: 3px; }
+.seg.blocked { animation: pulse 1.6s ease-in-out infinite; }
+@keyframes pulse { 50% { opacity: .45; } }
+@media (prefers-reduced-motion: reduce) { .seg.blocked { animation: none; } }
+.mark { position: absolute; top: 3px; width: 4px; height: 16px; border-radius: 2px; transform: translateX(-50%); }
+.state { font-size: 11px; padding: 0 6px; border-radius: 4px; color: #fff; margin-right: 2px; }
+.cols { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; margin-top: 16px; }
+@media (max-width: 700px) { .cols { grid-template-columns: minmax(0, 1fr); } }
+.col h3 { font-size: 12px; color: var(--muted); margin: 0 0 6px; cursor: pointer; }
+.ev { font-size: 12px; padding: 3px 4px; border-radius: 4px; border-bottom: 1px solid var(--line); cursor: pointer; }
+.ev.new { background: var(--new); }
+.ev time { color: var(--muted); margin-right: 6px; font-variant-numeric: tabular-nums; }
+.ev .d { color: var(--muted); display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.empty { color: var(--muted); font-size: 12px; }
+#detail pre { white-space: pre-wrap; word-break: break-word; background: var(--bg); padding: 8px;
+  border-radius: 6px; font-size: 12px; max-height: 320px; overflow: auto; }
+#detail dl { display: grid; grid-template-columns: auto 1fr; gap: 2px 10px; font-size: 12px; margin: 0 0 8px; }
+#detail dt { color: var(--muted); } #detail dd { margin: 0; word-break: break-all; }
+.err { color: var(--blocked); font-size: 12px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>butler board</h1>
+  <div class="summary">
+    <div class="bar" id="bar"></div>
+    <div class="legend" id="legend"></div>
+  </div>
+  <div class="controls">
+    <label>範囲 <select id="range">
+      <option value="60">1 時間</option><option value="240" selected>4 時間</option>
+      <option value="1440">24 時間</option><option value="10080">7 日</option>
+    </select></label>
+    <label><input type="checkbox" id="closed"> close 済みも</label>
+    <button id="since" title="前回「確認した」を押したあとの出来事を強調します">前回からの変化</button>
+    <button id="seen">確認した</button>
+  </div>
+</header>
+<main>
+  <div>
+    <section>
+      <h2>タイムライン</h2>
+      <div class="lanes" id="lanes"></div>
+      <div class="err" id="err"></div>
+    </section>
+    <div class="cols" id="cols"></div>
+  </div>
+  <section id="detail"><h2>詳細</h2><p class="empty">タスクの行か出来事を選ぶと、ここにブリーフ、報告、画面の末尾が出ます。</p></section>
+</main>
+<script>
+"use strict";
+const KIND = {
+  started: "起動", followup: "追加指示", reported: "報告", blocked: "blocked",
+  unblocked: "再開", stopped: "報告なしで停止", gone: "pane 消失", closed: "close",
+};
+const GROUP = { working: "working", reported: "reported", blocked: "blocked" };
+const GROUP_LABEL = { working: "作業中", reported: "報告済み", blocked: "blocked", stopped: "停止・不明" };
+const INTERVALS = [15, 60, 240];
+const $ = (id) => document.getElementById(id);
+let data = { now: null, tasks: [] };
+let selected = null;
+let highlight = false;
+
+function store(key, value) {
+  try { if (value === undefined) return localStorage.getItem(key); localStorage.setItem(key, value); }
+  catch (e) { return null; }
+}
+const group = (state) => GROUP[state] || "stopped";
+const color = (g) => `var(--${g})`;
+const t = (iso) => new Date(iso).getTime();
+const hhmm = (ms) => new Date(ms).toLocaleTimeString("ja-JP", { hour: "2-digit", minute: "2-digit" });
+const stamp = (iso) => new Date(iso).toLocaleString("ja-JP", { month: "2-digit", day: "2-digit",
+  hour: "2-digit", minute: "2-digit", second: "2-digit" });
+function el(tag, props = {}, ...kids) {
+  const n = document.createElement(tag);
+  for (const [k, v] of Object.entries(props)) {
+    if (k === "style") Object.assign(n.style, v); else if (k.startsWith("on")) n[k] = v; else n.setAttribute(k, v);
+  }
+  for (const kid of kids) if (kid != null) n.append(kid);
+  return n;
+}
+
+// Intervals of one state from a task's events: working until blocked, a report or a stop, and so on.
+function segments(task, nowMs) {
+  const segs = [];
+  let open = null;
+  const close = (at) => { if (open) { segs.push({ ...open, end: at }); open = null; } };
+  for (const e of task.events) {
+    const at = t(e.at);
+    const next = { started: "working", followup: "working", unblocked: "working", blocked: "blocked",
+                   reported: "reported", stopped: "stopped" }[e.kind];
+    close(at);
+    if (next && e.kind !== "closed" && e.kind !== "gone") open = { kind: next, start: at };
+  }
+  if (open) {
+    // The live state wins for the tail: a change nobody was waiting for is not recorded yet.
+    const live = group(task.state);
+    if (!task.closed_at && live !== open.kind && task.state !== "unknown") {
+      segs.push({ ...open, end: nowMs }); open = null;
+      segs.push({ kind: live, start: nowMs - 1, end: nowMs, live: true });
+    } else close(nowMs);
+  }
+  return segs;
+}
+
+function renderSummary() {
+  const counts = { working: 0, blocked: 0, reported: 0, stopped: 0 };
+  for (const task of data.tasks) if (!task.closed_at) counts[group(task.state)]++;
+  const total = Object.values(counts).reduce((a, b) => a + b, 0);
+  $("bar").replaceChildren(...Object.entries(counts).filter(([, n]) => n).map(([g, n]) =>
+    el("span", { class: `s-${g}`, style: { width: `${(100 * n) / total}%` }, title: `${GROUP_LABEL[g]} ${n}` })));
+  $("legend").replaceChildren(...Object.entries(counts).map(([g, n]) =>
+    el("span", {}, el("span", { class: `dot s-${g}` }), `${GROUP_LABEL[g]} ${n}`)));
+  document.title = counts.blocked ? `(${counts.blocked} blocked) butler board` : "butler board";
+}
+
+function renderLanes() {
+  const nowMs = t(data.now);
+  const span = Number($("range").value) * 60000;
+  const from = nowMs - span;
+  const x = (ms) => `${Math.max(0, Math.min(100, (100 * (ms - from)) / span))}%`;
+  const kids = [el("div"), el("div", { class: "axis" }, ...[0, 0.25, 0.5, 0.75, 1].map((f) =>
+    el("span", { style: { left: `${f * 100}%` } }, f === 1 ? "now" : hhmm(from + f * span))))];
+  for (const task of data.tasks) {
+    const g = group(task.state);
+    const sel = task.id === selected ? " sel" : "";
+    const pick = () => select(task.id);
+    kids.push(el("div", { class: "who" + sel, title: `${task.title}\n${task.where}`, onclick: pick },
+      el("span", { class: "state", style: { background: task.closed_at ? "var(--muted)" : color(g) } },
+        task.closed_at ? "closed" : task.state),
+      ` ${task.label} ${task.title}`, el("small", {}, task.agent)));
+    const lane = el("div", { class: "lane" + sel, onclick: pick });
+    for (const s of segments(task, nowMs)) {
+      if (s.end < from) continue;
+      const left = Math.max(s.start, from);
+      lane.append(el("div", { class: `seg ${s.kind}`, title: `${GROUP_LABEL[s.kind] || s.kind} ${hhmm(s.start)}–${hhmm(s.end)}`,
+        style: { left: x(left), width: `max(3px, calc(${x(s.end)} - ${x(left)}))`, background: color(s.kind) } }));
+    }
+    for (const e of task.events) {
+      if (t(e.at) < from || !["followup", "reported", "closed"].includes(e.kind)) continue;
+      lane.append(el("div", { class: "mark", title: `${KIND[e.kind]} ${stamp(e.at)}\n${e.detail || ""}`,
+        style: { left: x(t(e.at)), background: e.kind === "followup" ? "var(--followup)" :
+                 e.kind === "reported" ? "var(--reported)" : "var(--muted)" } }));
+    }
+    kids.push(lane);
+  }
+  if (!data.tasks.length) kids.push(el("p", { class: "empty" }, "タスクはありません"));
+  $("lanes").replaceChildren(...kids);
+}
+
+function renderColumns() {
+  const nowMs = t(data.now);
+  const seen = Number(store("butler-board-seen") || 0);
+  const all = data.tasks.flatMap((task) => task.events.map((e) => ({ ...e, task })))
+    .sort((a, b) => t(b.at) - t(a.at));
+  $("cols").replaceChildren(...INTERVALS.map((min) => {
+    const items = all.filter((e) => nowMs - t(e.at) <= min * 60000);
+    const label = min < 60 ? `この ${min} 分` : `この ${min / 60} 時間`;
+    return el("section", { class: "col" }, el("h3", { title: "選ぶとタイムラインの範囲をこの区間に合わせます",
+        onclick: () => { $("range").value = String(Math.max(60, min)); render(); } }, `${label}（${items.length}）`),
+      ...(items.length ? items.slice(0, 50).map((e) => el("div", {
+        class: "ev" + (highlight && t(e.at) > seen ? " new" : ""), onclick: () => select(e.task.id) },
+        el("time", {}, hhmm(t(e.at))), el("span", { class: "dot", style: { background: kindColor(e.kind) } }),
+        `${e.task.label} ${KIND[e.kind] || e.kind}`, el("span", { class: "d" }, said(e) || e.task.title)))
+        : [el("p", { class: "empty" }, "出来事はありません")]));
+  }));
+}
+const said = (e) => (e.kind === "started" ? null : e.detail);
+const kindColor = (k) => ({ blocked: "var(--blocked)", reported: "var(--reported)", followup: "var(--followup)",
+  stopped: "var(--stopped)", gone: "var(--stopped)", closed: "var(--muted)" })[k] || "var(--working)";
+
+function render() { renderSummary(); renderLanes(); renderColumns(); }
+
+async function select(id) {
+  selected = id;
+  renderLanes();
+  const box = $("detail");
+  box.replaceChildren(el("h2", {}, "詳細"), el("p", { class: "empty" }, "読み込み中…"));
+  try {
+    const d = await (await fetch(`/api/tasks/${id}`)).json();
+    const rows = [["状態", d.closed_at ? "closed" : d.state], ["agent", d.agent], ["cwd", d.cwd],
+      ["branch", d.branch], ["worktree", d.worktree_path], ["起動", stamp(d.created_at)]].filter(([, v]) => v);
+    const peekBox = el("pre", {}, "（「読み込む」で worker の画面の末尾を表示します）");
+    box.replaceChildren(el("h2", {}, `${d.label} ${d.title}`),
+      el("dl", {}, ...rows.flatMap(([k, v]) => [el("dt", {}, k), el("dd", {}, v)])),
+      el("h2", {}, "ブリーフ"), el("pre", {}, d.brief),
+      el("h2", {}, "出来事"), ...d.events.slice().reverse().map((e) => el("div", { class: "ev" },
+        el("time", {}, stamp(e.at)), KIND[e.kind] || e.kind,
+        said(e) ? el("pre", {}, said(e)) : null)),
+      el("h2", {}, "画面の末尾 ", el("button", { onclick: async () => {
+        peekBox.textContent = "読み込み中…";
+        peekBox.textContent = await (await fetch(`/api/tasks/${id}/peek`)).text();
+      } }, "読み込む")), peekBox);
+  } catch (e) { box.replaceChildren(el("h2", {}, "詳細"), el("p", { class: "err" }, String(e))); }
+}
+
+async function refresh() {
+  try {
+    const res = await fetch(`/api/tasks${$("closed").checked ? "?all=1" : ""}`);
+    data = await res.json();
+    $("err").textContent = "";
+    render();
+  } catch (e) { $("err").textContent = `更新できませんでした: ${e}`; }
+}
+
+$("range").value = store("butler-board-range") || "240";
+$("range").onchange = () => { store("butler-board-range", $("range").value); render(); };
+$("closed").onchange = refresh;
+$("since").onclick = () => { highlight = !highlight; $("since").classList.toggle("on", highlight); renderColumns(); };
+$("seen").onclick = () => { store("butler-board-seen", String(Date.now())); renderColumns(); };
+refresh();
+setInterval(refresh, 3000);
+</script>
+</body>
+</html>
