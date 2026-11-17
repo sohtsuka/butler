@@ -94,7 +94,7 @@ class FailedStartTests(TaskTest):
         return REAL_RUN(["git", "-C", str(self.root), *args], check=True,
                         capture_output=True, text=True).stdout.strip()
 
-    def failed_start(self, commit):
+    def failed_start(self, commit, cleanup_fails=False):
         self.git("init", "-b", "main")
         self.git("config", "user.name", "Test")
         self.git("config", "user.email", "test@example.invalid")
@@ -119,6 +119,8 @@ class FailedStartTests(TaskTest):
             if args[:2] == ("agent", "rename"):
                 raise task.HerdrError("agent_not_found", "worker exited before rename")
             if args == ("workspace", "close", "w999"):
+                if cleanup_fails:
+                    raise task.HerdrError("unavailable", "cleanup could not reach herdr")
                 return {}
             self.fail(f"unexpected herdr call: {args}")
 
@@ -133,7 +135,7 @@ class FailedStartTests(TaskTest):
                 patch.object(task, "commit_dirs", return_value=[]), \
                 patch.object(task, "herdr", side_effect=fake_herdr), \
                 patch.object(task.subprocess, "run", side_effect=only_fixture_git):
-            with self.assertRaises(SystemExit):
+            with self.assertRaises((SystemExit, task.HerdrError)):
                 task.cmd_start(args)
         return worktree, branch
 
@@ -145,6 +147,15 @@ class FailedStartTests(TaskTest):
         _, branch = self.failed_start(commit=True)
         self.assertIn(branch, self.git("branch", "--list", branch))
         self.assertEqual(self.git("show", f"{branch}:worker.txt"), "completed worker output")
+
+    def test_failed_cleanup_leaves_task_visible_for_retry(self):
+        self.failed_start(commit=False, cleanup_fails=True)
+        self.assertIsNone(task.load(self.db, 1).closed_at)
+        self.assertEqual([t.id for t in task.all_tasks(self.db, include_closed=False)], [1])
+
+    def test_successful_cleanup_closes_task(self):
+        self.failed_start(commit=False)
+        self.assertIsNotNone(task.load(self.db, 1).closed_at)
 
 
 if __name__ == "__main__":

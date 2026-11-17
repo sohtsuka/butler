@@ -262,11 +262,11 @@ def cmd_start(args: argparse.Namespace) -> None:
             else:
                 raise
     except HerdrError as e:
-        db.execute("UPDATE tasks SET closed_at = ? WHERE id = ?", (now(), task_id))
         # A readiness timeout or failed rename can follow real work, including commits.
         # Keep the worktree and branch for inspection, just as a normal close does.
         task = load(db, task_id)
         close_herdr(task, remove_worktree=False)
+        db.execute("UPDATE tasks SET closed_at = ? WHERE id = ?", (now(), task_id))
         kept = f"; worktree kept: {task.worktree_path}" if task.worktree_path else ""
         sys.exit(f"task start: {e}; task {label} closed{kept}")
     print(label)
