@@ -35,5 +35,5 @@ Preconditions:
 ## Gotchas
 
 - Codex shows its own folder-trust screen for a directory it has not trusted, so a fresh fixture may start `blocked`. Peek first, then answer with `task keys <id> ...` only what the screen offers. Trust is recorded in `~/.codex/config.toml` and outlives the run.
-- Codex in a worktree writes the commit into the main repo's `.git/worktrees/...`, which is outside its cwd. If the sandbox refuses the commit, Codex asks for approval and the task goes `blocked`. Record what you saw.
+- Codex in a worktree writes the commit into the main repo's `.git` (its own `.git/worktrees/<name>`, plus `objects`, `refs` and `logs`), outside its cwd. Codex keeps a cwd's gitdir read-only even when `.git` is an `--add-dir`, so `bin/task` passes each of those dirs as its own `--add-dir`; `hooks` and `config` stay read-only. If a commit still asks for approval, the task goes `blocked`: peek and record the screen.
 - Codex cannot run inside the cloud container (OpenAI hosts are blocked there). Run this feature on the operator's PC.
