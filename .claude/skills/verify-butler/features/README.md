@@ -34,4 +34,4 @@ Each feature file starts with an H1 and one paragraph, then four H2s in this ord
 - [Blocked worker](./blocked-worker.md) covers a worker stuck at a dialog: detection, peek, refused text, answering with keys, and closing.
 - [Follow-up](./follow-up.md) covers sending a finished worker another instruction and waiting for its new report.
 - [Codex worker](./codex-worker.md) covers starting Codex workers with `--agent codex`, their reports and follow-ups, the agent column, and the butler choosing Codex.
-- [Butler agent](./butler-agent.md) covers launching, finding the running butler, resuming the butler, its role, delegating a request end to end, and the SessionStart hook.
+- [Butler agent](./butler-agent.md) covers launching in the pane it was run from and the new-tab fallback, finding the running butler, resuming the butler, its role, delegating a request end to end, and the SessionStart hook.
