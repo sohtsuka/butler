@@ -234,7 +234,7 @@ def main() -> None:
               "lock, and it travels in plain HTTP: briefs, reports and worker screens are readable "
               "by anyone who sees this traffic.", file=sys.stderr, flush=True)
     shown = "127.0.0.1" if args.host == "0.0.0.0" else args.host
-    print(f"butler board: http://{shown}:{args.port}/?token={TOKEN}  (Ctrl+C to stop)", flush=True)
+    print(f"butler board: http://{shown}:{server.server_port}/?token={TOKEN}  (Ctrl+C to stop)", flush=True)
     try:
         server.serve_forever()
     except KeyboardInterrupt:
