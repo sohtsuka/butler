@@ -106,6 +106,13 @@ class ServerTests(BoardCase):
         status, _ = self.get("/api/tasks", host="attacker.example:8765")
         self.assertEqual(status, 403)
 
+    def test_allowed_host_is_served(self):
+        self.enterContext(patch.object(board, "ALLOWED_HOSTS", board.ALLOWED_HOSTS | {"172.20.1.2"}))
+        status, _ = self.get("/api/tasks", host="172.20.1.2:8765")
+        self.assertEqual(status, 200)
+        status, _ = self.get("/api/tasks", host="attacker.example:8765")
+        self.assertEqual(status, 403)
+
 
 if __name__ == "__main__":
     unittest.main()

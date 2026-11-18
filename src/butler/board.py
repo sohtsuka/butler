@@ -1,7 +1,7 @@
 """A read-only web screen of the butler's tasks: a timeline per task, what happened lately, details.
 
 It only reads: the DB is opened read-only, herdr is only asked for pane states and screen tails,
-and nothing here moves the herdr view. It listens on 127.0.0.1 only."""
+and nothing here moves the herdr view. It listens on 127.0.0.1 unless told otherwise (--host)."""
 
 from __future__ import annotations
 
@@ -10,6 +10,7 @@ import json
 import os
 import re
 import sqlite3
+import sys
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -119,14 +120,16 @@ class Cache:
 
 
 CACHE = Cache()
+# Host header names served; --allow-host adds more (e.g. a WSL address reached from Windows).
+ALLOWED_HOSTS = {"127.0.0.1", "localhost"}
 
 
 class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
-        # Bound to 127.0.0.1, but a web page could still reach it by rebinding its own DNS name
-        # to 127.0.0.1. Such a request carries that name in Host, so only local names are served.
+        # A web page could still reach a local listener by rebinding its own DNS name to this
+        # address. Such a request carries that name in Host, so only known names are served.
         host = self.headers.get("Host", "").rsplit(":", 1)[0]
-        if host not in ("127.0.0.1", "localhost"):
+        if host not in ALLOWED_HOSTS:
             return self.send(403, b"forbidden host", "text/plain")
         path, _, query = self.path.partition("?")
         if path == "/":
@@ -160,14 +163,28 @@ class Handler(BaseHTTPRequestHandler):
 
 def main() -> None:
     p = argparse.ArgumentParser(prog="butler-board", description=__doc__)
+    p.add_argument("--host", default="127.0.0.1",
+                   help="address to listen on (default 127.0.0.1; 0.0.0.0 for every interface)")
     p.add_argument("--port", type=int, default=8765)
+    p.add_argument("--allow-host", action="append", default=[], metavar="NAME",
+                   help="also serve requests whose Host header is NAME (repeatable)")
     p.add_argument("--home", help="the butler's state directory (default: BUTLER_HOME)")
     args = p.parse_args()
     if args.home:
         os.environ["BUTLER_HOME"] = args.home
         task.DB_PATH = paths.home() / "butler.db"
-    server = ThreadingHTTPServer(("127.0.0.1", args.port), Handler)
-    print(f"butler board: http://127.0.0.1:{args.port}/  (Ctrl+C to stop)", flush=True)
+    if ":" in args.host:
+        p.error("--host takes an IPv4 address or a host name; IPv6 is not supported")
+    ALLOWED_HOSTS.update(args.allow_host)
+    if args.host not in ("127.0.0.1", "localhost", "0.0.0.0"):
+        ALLOWED_HOSTS.add(args.host)
+    server = ThreadingHTTPServer((args.host, args.port), Handler)
+    if args.host not in ("127.0.0.1", "localhost"):
+        print(f"butler board: listening on {args.host}, not only this machine. There is no login, "
+              "and briefs, reports and worker screens are readable by anyone who can reach this "
+              f"port and send Host: {', '.join(sorted(ALLOWED_HOSTS))}.", file=sys.stderr, flush=True)
+    shown = "127.0.0.1" if args.host == "0.0.0.0" else args.host
+    print(f"butler board: http://{shown}:{args.port}/  (Ctrl+C to stop)", flush=True)
     try:
         server.serve_forever()
     except KeyboardInterrupt:
