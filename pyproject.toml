@@ -1,0 +1,23 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "butler"
+version = "0.1.0"
+description = "A long-lived Claude Code session that talks with you and runs herdr-hosted worker agents"
+readme = "README.md"
+license = "Apache-2.0"
+license-files = ["LICENSE"]
+requires-python = ">=3.10"
+dependencies = []
+
+[project.scripts]
+butler = "butler.launcher:main"
+butler-task = "butler.task:main"
+
+[project.urls]
+Repository = "https://github.com/sohtsuka/butler"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/butler"]

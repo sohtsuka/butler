@@ -1,16 +1,16 @@
 # Butler agent
 
-`bin/butler` runs one long-lived Claude Code agent, the butler, in the herdr pane the operator ran it from, or in a new tab when that pane cannot host it. Its role comes from `butler/prompt.md` and `butler/settings.json`. It talks with the human, turns requests into `bin/task` tasks, waits on them in the background, and summarizes reports. Its session id is fixed, so a relaunch resumes the same conversation. A SessionStart hook re-injects open tasks after startup, resume or compaction.
+`bin/butler` runs one long-lived Claude Code agent, the butler, in the herdr pane the operator ran it from, or in a new tab when that pane cannot host it. Its role comes from `src/butler/data/prompt.md` and `src/butler/data/settings.json`. It talks with the human, turns requests into `butler-task` tasks, waits on them in the background, and summarizes reports. Its session id is fixed, so a relaunch resumes the same conversation. A SessionStart hook re-injects open tasks after startup, resume or compaction.
 
 ## Sub-features
 
-- `launch` makes `bin/butler`, run at a pane's shell prompt, replace itself with claude in that pane: no tab appears, and the agent `$BUTLER_NAME` ends up in the calling pane with `--session-id <uuid>`. It writes `state/butler-session-id`.
+- `launch` makes `bin/butler`, run at a pane's shell prompt, replace itself with claude in that pane: no tab appears, and the agent `$BUTLER_NAME` ends up in the calling pane with `--session-id <uuid>`. It writes `$BUTLER_HOME/butler-session-id`.
 - `fallback` makes `bin/butler`, when its pane cannot be handed over (outside herdr, output piped, or an agent already in the pane), start `$BUTLER_NAME` in a new tab without focus and say so.
 - `running` makes a second `bin/butler` start nothing, print `butler is running in <pane> (<tab>)` and exit 0, without moving focus, so there is still exactly one `$BUTLER_NAME` agent.
 - `resume` makes `bin/butler`, after the tab is closed, start again with `--resume <same uuid>` and keep the earlier conversation.
-- `role` makes the butler say it delegates through `bin/task` and does not edit files. Edit and Write are denied.
-- `delegate` turns a request into a task. The butler arms `task wait` in the background, is woken by it, and summarizes the report.
-- `hook` makes `bin/task list --for-hook` print the open-task block, with re-arm lines for working or idle tasks and a separate blocked line.
+- `role` makes the butler say it delegates through `butler-task` and does not edit files. Edit and Write are denied.
+- `delegate` turns a request into a task. The butler arms `butler-task wait` in the background, is woken by it, and summarizes the report.
+- `hook` makes `butler-task list --for-hook` print the open-task block, with re-arm lines for working or idle tasks and a separate blocked line.
 
 ## How to get to it (user POV)
 
@@ -24,13 +24,13 @@ Preconditions:
 - Baseline from the README.
 - No agent named `$BUTLER_NAME` (`$VB doctor` lists run agents).
 
-- **Launch.** Run `$VB butler-here "$RUN"`. `artifacts/butler-here.log` lists the same tab ids before and after `bin/butler`, and `agent get "$BUTLER_NAME"` reports `pane_id` equal to the shell pane the log names, with `agent_status` `idle` or `working`. The pane's screen shows `butler is starting in this pane (<pane>)`. `$RUN/app/state/butler-session-id` holds a uuid.
+- **Launch.** Run `$VB butler-here "$RUN"`. `artifacts/butler-here.log` lists the same tab ids before and after `bin/butler`, and `agent get "$BUTLER_NAME"` reports `pane_id` equal to the shell pane the log names, with `agent_status` `idle` or `working`. The pane's screen shows `butler is starting in this pane (<pane>)`. `$RUN/home/butler-session-id` holds a uuid.
 - **Fallback.** With no `$BUTLER_NAME` alive, run `$VB butler "$RUN"` (its output is piped, so the takeover is refused). `artifacts/butler-launch.log` says `butler started in <pane> (<tab>), a new tab`, and that pane is in a tab that was not there before.
 - **Running, not duplicate.** Run `$VB butler "$RUN"` again. It prints `butler is running in <pane> (<tab>)`, focus stays where it was, and `herdr agent list` shows exactly one `$BUTLER_NAME`.
-- **Role.** Run `$VB say "$RUN" ag-role "あなたの役割は？短く答えて。"`. The screen shows a Japanese answer saying it manages tasks, delegates through `bin/task`, and does not edit files.
-- **Delegate.** Run `$VB say "$RUN" ag-ask "$FIXTURE_PLAIN に butler.txt を作って中身を 'via butler' にしてください。worktree は不要です。"`, then `$VB settle "$RUN" ag-summary 20`. `task list --all` (via `vb run`) shows a new task whose cwd is `$FIXTURE_PLAIN`. `cat "$FIXTURE_PLAIN/butler.txt"` prints `via butler`. `ag-summary.screen.txt` shows the butler summarizing the report after a background wake.
-- **Resume.** Close the butler's tab (the `butler-here` shell tab) with `herdr tab close "$(herdr agent get "$BUTLER_NAME" | jq -r .result.agent.tab_id)"`, then run `$VB butler "$RUN"` and `$VB say "$RUN" ag-resume "さっき私が最初に聞いた質問は何でしたか？"`. Then run `ps -o args= -p "$(herdr pane process-info --pane "$(herdr agent get "$BUTLER_NAME" | jq -r .result.agent.pane_id)" | jq -r '.result.process_info.foreground_processes[0].pid')" > "$RUN/artifacts/ag-resume-args.txt"`. The args contain `--resume <the uuid in $RUN/app/state/butler-session-id>`, and the answer quotes the role question.
-- **Hook.** Run `$VB run "$RUN" ag-hook -- env CLAUDE_PROJECT_DIR="$RUN/app" "$RUN/app/bin/task" list --for-hook`. It prints `[butler] Open tasks ...` with each open task, or `No open tasks`.
+- **Role.** Run `$VB say "$RUN" ag-role "あなたの役割は？短く答えて。"`. The screen shows a Japanese answer saying it manages tasks, delegates through `butler-task`, and does not edit files.
+- **Delegate.** Run `$VB say "$RUN" ag-ask "$FIXTURE_PLAIN に butler.txt を作って中身を 'via butler' にしてください。worktree は不要です。"`, then `$VB settle "$RUN" ag-summary 20`. `butler-task list --all` (via `vb run`) shows a new task whose cwd is `$FIXTURE_PLAIN`. `cat "$FIXTURE_PLAIN/butler.txt"` prints `via butler`. `ag-summary.screen.txt` shows the butler summarizing the report after a background wake.
+- **Resume.** Close the butler's tab (the `butler-here` shell tab) with `herdr tab close "$(herdr agent get "$BUTLER_NAME" | jq -r .result.agent.tab_id)"`, then run `$VB butler "$RUN"` and `$VB say "$RUN" ag-resume "さっき私が最初に聞いた質問は何でしたか？"`. Then run `ps -o args= -p "$(herdr pane process-info --pane "$(herdr agent get "$BUTLER_NAME" | jq -r .result.agent.pane_id)" | jq -r '.result.process_info.foreground_processes[0].pid')" > "$RUN/artifacts/ag-resume-args.txt"`. The args contain `--resume <the uuid in $RUN/home/butler-session-id>`, and the answer quotes the role question.
+- **Hook.** Run `$VB run "$RUN" ag-hook -- butler-task list --for-hook`. It prints `[butler] Open tasks ...` with each open task, or `No open tasks`.
 
 ## Gotchas
 

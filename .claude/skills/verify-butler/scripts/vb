@@ -27,9 +27,9 @@ load() {
   source "$RUN_DIR/env"
   unset HERDR_WORKSPACE_ID
   [[ -n "$RUN_WORKSPACE_ID" ]] && export HERDR_WORKSPACE_ID="$RUN_WORKSPACE_ID"
-  # bin/task and bin/butler open tabs in $HERDR_WORKSPACE_ID, so this keeps every
+  # butler-task and bin/butler open tabs in $HERDR_WORKSPACE_ID, so this keeps every
   # tab the run makes inside the run's own workspace, away from the operator's tabs.
-  export BUTLER_NAME PATH="$RUN_DIR/app/bin:$PATH"
+  export BUTLER_NAME BUTLER_HOME="$RUN_DIR/home" PATH="$RUN_DIR/app/bin:$PATH"
 }
 herdr_json() { herdr "$@" 2>/dev/null || true; }
 
@@ -42,7 +42,7 @@ cmd_launch() {
   local git="$run/git-$id" plain="$run/plain-$id"
   mkdir -p "$run/artifacts" "$plain"
   # Copy the working tree, not HEAD, so uncommitted changes are what gets verified.
-  mkdir -p "$run/app"; cp -r "$SRC/bin" "$SRC/butler" "$run/app/"
+  mkdir -p "$run/app" "$run/home"; cp -r "$SRC/bin" "$SRC/src" "$run/app/"
   git init -q "$git"
   git -C "$git" -c user.name=vb -c user.email=vb@localhost commit -q --allow-empty -m init
   # A dedicated workspace for the run's tabs (plain-dir workers, the run's butler).
@@ -67,13 +67,14 @@ cmd_doctor() {
   check "run workspace exists" '[[ -n "${HERDR_WORKSPACE_ID:-}" ]] && herdr workspace get "$HERDR_WORKSPACE_ID"'
   check "run workspace is not the caller's" '[[ "${HERDR_WORKSPACE_ID:-}" != "$CALLER_WORKSPACE_ID" ]]'
   check "herdr server running" 'herdr status server | grep -q "status: running"'
-  check "app copy matches working tree" 'diff -r "$SRC/bin" "$RUN_DIR/app/bin" -x __pycache__ && diff -r "$SRC/butler" "$RUN_DIR/app/butler"'
-  check "task CLI is the run copy" '[[ "$(command -v task)" == "$RUN_DIR/app/bin/task" ]]'
+  check "app copy matches working tree" 'diff -r "$SRC/bin" "$RUN_DIR/app/bin" -x __pycache__ && diff -r "$SRC/src" "$RUN_DIR/app/src" -x __pycache__'
+  check "task CLI is the run copy" '[[ "$(command -v butler-task)" == "$RUN_DIR/app/bin/butler-task" ]]'
+  check "BUTLER_HOME is the run's" '[[ "$BUTLER_HOME" == "$RUN_DIR/home" ]]'
   check "fixture-git has a commit" 'git -C "$FIXTURE_GIT" rev-parse HEAD'
   check "agent namespace is not the live butler" '[[ "$BUTLER_NAME" != butler ]]'
   echo "info  herdr $(herdr --version | cut -d" " -f2), $(claude --version), $(codex --version 2>/dev/null || echo "codex missing")"
   echo "info  run workspace=${HERDR_WORKSPACE_ID:-none} (caller: ${CALLER_WORKSPACE_ID:-none})"
-  echo "info  BUTLER_NAME=$BUTLER_NAME  db=$RUN_DIR/app/state/butler.db"
+  echo "info  BUTLER_NAME=$BUTLER_NAME  db=$BUTLER_HOME/butler.db"
   echo "info  run agents: $(herdr agent list | jq -r --arg n "$BUTLER_NAME" '[.result.agents[] | select((.name // "") | startswith($n)) | "\(.name)=\(.agent_status)"] | join(" ")')"
   [[ $ok == 1 ]] || die "doctor failed"
 }
@@ -103,7 +104,7 @@ cmd_butler_here() {
   load "$1"
   local log="$RUN_DIR/artifacts/butler-here.log" created pane tab waited=0
   created="$(herdr tab create --cwd "$RUN_DIR/app" --label "$BUTLER_NAME-shell" --no-focus \
-    --env "BUTLER_NAME=$BUTLER_NAME" --workspace "$HERDR_WORKSPACE_ID")"
+    --env "BUTLER_NAME=$BUTLER_NAME" --env "BUTLER_HOME=$BUTLER_HOME" --workspace "$HERDR_WORKSPACE_ID")"
   pane="$(jq -r '.result.root_pane.pane_id' <<<"$created")"
   tab="$(jq -r '.result.tab.tab_id' <<<"$created")"
   [[ -n "$pane" && "$pane" != null ]] || die "could not create the shell pane"
@@ -144,10 +145,10 @@ cmd_settle() {
 
 cmd_cleanup() {
   load "$1"
-  local db="$RUN_DIR/app/state/butler.db"
+  local db="$BUTLER_HOME/butler.db"
   if [[ -f "$db" ]]; then
     for id in $(python3 -c "import sqlite3,sys;[print(r[0]) for r in sqlite3.connect(sys.argv[1]).execute('SELECT id FROM tasks')]" "$db"); do
-      (cd "$RUN_DIR/app" && bin/task close "$id" --remove-worktree) || true
+      butler-task close "$id" --remove-worktree || true
     done
   fi
   local tab; tab="$(herdr_json agent get "$BUTLER_NAME" | jq -r '.result.agent.tab_id // empty')"
@@ -162,7 +163,9 @@ cmd_cleanup() {
       herdr workspace close "$ws" >/dev/null || true
     fi
   done
-  rm -rf "$RUN_DIR/app" "$FIXTURE_GIT" "$FIXTURE_PLAIN"
+  rm -rf "$RUN_DIR/app" "$RUN_DIR/home" "$FIXTURE_GIT" "$FIXTURE_PLAIN"
+  # herdr leaves the fixture's (now empty) worktree parent behind.
+  rmdir "$HOME/.herdr/worktrees/$(basename "$FIXTURE_GIT")" 2>/dev/null || true
   local left; left="$(herdr agent list | jq -r --arg n "$BUTLER_NAME" '[.result.agents[] | select((.name // "") | startswith($n))] | length')"
   [[ "$left" == 0 ]] || die "agents still alive under $BUTLER_NAME"
   echo "cleaned $RUN_DIR; evidence kept in $RUN_DIR/artifacts"
