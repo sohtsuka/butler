@@ -13,7 +13,7 @@ uv tool install git+https://github.com/sohtsuka/butler@<コミット SHA>
 butler doctor   # herdr / claude / codex の有無と版、BUTLER_HOME と信頼状態を確認
 ```
 
-`butler` と `butler-task` が `~/.local/bin` に入ります。更新は差分を確認してから、新しい SHA で `uv tool install --force git+https://github.com/sohtsuka/butler@<新しい SHA>` を実行します。自動更新はしません。アンインストールは `uv tool uninstall butler` です（状態は `BUTLER_HOME` に残ります）。
+`butler`、`butler-task`、`butler-board` が `~/.local/bin` に入ります。更新は差分を確認してから、新しい SHA で `uv tool install --force git+https://github.com/sohtsuka/butler@<新しい SHA>` を実行します。自動更新はしません。アンインストールは `uv tool uninstall butler` です（状態は `BUTLER_HOME` に残ります）。
 
 ## 状態の置き場所（BUTLER_HOME）
 
@@ -67,15 +67,17 @@ butler
 ## タスク状態の画面
 
 ```bash
-bin/board [--port 8765]
+butler-board [--port 8765] [--home DIR]
 ```
+
+checkout から直接動かすときは `bin/board` です。読む DB は `BUTLER_HOME`（`--home` で指定も可）の `butler.db` です。
 
 ブラウザで http://127.0.0.1:8765/ を開くと、タスクの状態を一覧できます。3 秒ごとに更新されます。
 
 - 上部のバーに、open なタスクのうち作業中、blocked、報告済み、停止・不明の件数を出します。blocked があるとタブのタイトルにも件数が出ます。
 - タイムラインは 1 タスク 1 行で、作業中（青）、blocked（赤）、報告後（緑）の区間と、追加指示（紫）や報告（緑）の印を時間軸に並べます。範囲は 1 時間から 7 日まで選べます。
 - 下の 3 列は「この 15 分 / 1 時間 / 4 時間」に起きたことです。「確認した」を押した時刻はブラウザに保存され、「前回からの変化」でそれ以降の出来事を強調します。
-- 行や出来事を選ぶと、ブリーフ、各回の報告、追加指示の全文が右に出ます。「読み込む」で worker の画面の末尾（`bin/task peek` 相当）も見られます。
+- 行や出来事を選ぶと、ブリーフ、各回の報告、追加指示の全文が右に出ます。「読み込む」で worker の画面の末尾（`butler-task peek` 相当）も見られます。
 
 画面は読むだけです。DB は読み取り専用で開き、herdr には pane の状態と画面の末尾を問い合わせるだけで、herdr の表示は切り替えません。127.0.0.1 でだけ待ち受け、Host ヘッダが `127.0.0.1` か `localhost` 以外のリクエストは断ります。
 
