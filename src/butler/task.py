@@ -301,9 +301,16 @@ def worktree_git_problem(task: Task) -> str | None:
     return None
 
 
+def one_line(text: str, limit: int = 300) -> str:
+    """`text` with control characters escaped and its length capped: a problem names paths read
+    from files a worker wrote, and the butler relays the warning, so it must stay one inert line."""
+    text = "".join(c if c.isprintable() else repr(c)[1:-1] for c in text)
+    return text if len(text) <= limit else text[: limit - 1] + "…"
+
+
 def git_warning(task: Task) -> str:
     problem = worktree_git_problem(task)
-    return f"WARNING: do not run git in {task.worktree_path}: {problem}" if problem else ""
+    return one_line(f"WARNING: do not run git in {task.worktree_path}: {problem}") if problem else ""
 
 
 def cmd_start(args: argparse.Namespace) -> None:
