@@ -173,15 +173,17 @@ def main() -> None:
     if args.home:
         os.environ["BUTLER_HOME"] = args.home
         task.DB_PATH = paths.home() / "butler.db"
+    if ":" in args.host:
+        p.error("--host takes an IPv4 address or a host name; IPv6 is not supported")
     ALLOWED_HOSTS.update(args.allow_host)
-    if args.host not in ("127.0.0.1", "localhost", "::1", "0.0.0.0", "::"):
+    if args.host not in ("127.0.0.1", "localhost", "0.0.0.0"):
         ALLOWED_HOSTS.add(args.host)
     server = ThreadingHTTPServer((args.host, args.port), Handler)
-    if args.host not in ("127.0.0.1", "localhost", "::1"):
+    if args.host not in ("127.0.0.1", "localhost"):
         print(f"butler board: listening on {args.host}, not only this machine. There is no login, "
               "and briefs, reports and worker screens are readable by anyone who can reach this "
               f"port and send Host: {', '.join(sorted(ALLOWED_HOSTS))}.", file=sys.stderr, flush=True)
-    shown = "127.0.0.1" if args.host in ("0.0.0.0", "::") else args.host
+    shown = "127.0.0.1" if args.host == "0.0.0.0" else args.host
     print(f"butler board: http://{shown}:{args.port}/  (Ctrl+C to stop)", flush=True)
     try:
         server.serve_forever()
