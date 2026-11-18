@@ -16,7 +16,7 @@ import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 # The task CLI is the one place that knows the schema and how states are derived; reuse it.
-from butler import paths, task
+from butler import paths, task, version
 
 PAGE = paths.DATA / "board.html"
 # Derived states hit herdr once per open task; several open browser tabs share one answer.
@@ -163,6 +163,7 @@ class Handler(BaseHTTPRequestHandler):
 
 def main() -> None:
     p = argparse.ArgumentParser(prog="butler-board", description=__doc__)
+    version.add_flag(p, "butler-board")
     p.add_argument("--host", default="127.0.0.1",
                    help="address to listen on (default 127.0.0.1; 0.0.0.0 for every interface)")
     p.add_argument("--port", type=int, default=8765)

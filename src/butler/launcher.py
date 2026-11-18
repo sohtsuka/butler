@@ -17,10 +17,10 @@ import uuid
 from pathlib import Path
 
 try:
-    from butler import paths
+    from butler import paths, version
 except ImportError:  # run as a plain script from a checkout
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-    from butler import paths
+    from butler import paths, version
 
 STATE_HOME = paths.home()  # the butler's state, and its working directory
 ID_FILE = STATE_HOME / "butler-session-id"
@@ -173,13 +173,15 @@ def doctor() -> None:
         failed |= level == "FAIL"
         print(f"{level:<4}  {what:<12} {detail}")
 
+    sha = version.commit()
+    line("ok", "butler", version.__version__ + (f", commit {sha}" if sha else ", commit unknown"))
     for cmd, minimum, required in (("herdr", (0, 9, 5), True), ("claude", None, True),
                                    ("codex", None, False)):
-        text, version = version_of(cmd)
+        text, found = version_of(cmd)
         if text is None:
             line("FAIL" if required else "info", cmd,
                  "not found" + ("" if required else " (only needed for --agent codex)"))
-        elif minimum and (version is None or version < minimum):
+        elif minimum and (found is None or found < minimum):
             line("FAIL", cmd, f"{text}; need {'.'.join(map(str, minimum))} or later")
         else:
             line("ok", cmd, text)
@@ -197,6 +199,7 @@ def doctor() -> None:
 
 def main() -> None:
     p = argparse.ArgumentParser(prog="butler", description="Start the butler, or say where it runs.")
+    version.add_flag(p, "butler")
     sub = p.add_subparsers(dest="cmd")
     sub.add_parser("doctor", help="check this machine for what the butler needs")
     args = p.parse_args()
