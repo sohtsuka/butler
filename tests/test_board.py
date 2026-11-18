@@ -3,6 +3,7 @@
 import http.client
 from pathlib import Path
 import json
+import os
 import sys
 import tempfile
 import threading
@@ -17,7 +18,7 @@ from butler import board, task  # noqa: E402
 class BoardCase(unittest.TestCase):
     def setUp(self):
         self.root = Path(self.enterContext(tempfile.TemporaryDirectory()))
-        self.enterContext(patch.object(task, "DB_PATH", self.root / "state" / "butler.db"))
+        self.enterContext(patch.object(task, "DB_PATH", self.root / "state" / "db" / "butler.db"))
         self.enterContext(patch.object(task, "herdr", side_effect=AssertionError("no herdr")))
         self.enterContext(patch.object(board, "CACHE", board.Cache()))
 
@@ -66,6 +67,15 @@ class SnapshotTests(BoardCase):
         with patch.object(task, "herdr", side_effect=FileNotFoundError("herdr")):
             self.assertEqual(board.snapshot(include_closed=False)["tasks"][0]["state"], "unknown")
 
+    def test_db_not_yet_moved_into_db_dir_is_read_where_it_is(self):
+        self.seed()
+        legacy = task.DB_PATH.parent.parent / "butler.db"
+        for suffix in ("", "-wal", "-shm"):
+            if Path(f"{task.DB_PATH}{suffix}").exists():
+                os.rename(f"{task.DB_PATH}{suffix}", f"{legacy}{suffix}")
+        self.assertEqual(len(board.snapshot(include_closed=False)["tasks"]), 1)
+        self.assertFalse(task.DB_PATH.exists())
+
     def test_db_from_before_the_events_table(self):
         task.DB_PATH.parent.mkdir(parents=True)
         db = task.sqlite3.connect(task.DB_PATH)
@@ -81,18 +91,23 @@ class SnapshotTests(BoardCase):
 class ServerTests(BoardCase):
     def setUp(self):
         super().setUp()
+        self.enterContext(patch.object(board, "TOKEN", "s3cret"))
         self.server = board.ThreadingHTTPServer(("127.0.0.1", 0), board.Handler)
+        self.cookie = f"butler_board_{self.server.server_port}=s3cret"
         threading.Thread(target=self.server.serve_forever, daemon=True).start()
         self.addCleanup(self.server.server_close)
         self.addCleanup(self.server.shutdown)
 
-    def get(self, path, host=None):
+    def get(self, path, host=None, cookie=True, response=False):
+        headers = {"Host": host} if host else {}
+        if cookie:
+            headers["Cookie"] = self.cookie if cookie is True else cookie
         conn = http.client.HTTPConnection("127.0.0.1", self.server.server_port)
-        conn.request("GET", path, headers={"Host": host} if host else {})
+        conn.request("GET", path, headers=headers)
         res = conn.getresponse()
         body = res.read()
         conn.close()
-        return res.status, body
+        return (res.status, body, res) if response else (res.status, body)
 
     def test_serves_page_and_api(self):
         self.seed()
@@ -101,6 +116,27 @@ class ServerTests(BoardCase):
         self.assertIn(b"butler board", body)
         status, body = self.get("/api/tasks")
         self.assertEqual(json.loads(body)["tasks"][0]["title"], "title")
+
+    def test_without_the_token_nothing_is_served(self):
+        self.seed()
+        for path in ("/", "/api/tasks", "/api/tasks/1", "/api/tasks/1/peek"):
+            self.assertEqual(self.get(path, cookie=False)[0], 401, path)
+        port = self.server.server_port
+        self.assertEqual(self.get("/api/tasks", cookie=f"butler_board_{port}=wrong")[0], 401)
+        self.assertEqual(self.get("/api/tasks", cookie="butler_board_1=s3cret")[0], 401)
+        self.assertEqual(self.get("/?token=wrong", cookie=False)[0], 401)
+
+    def test_token_in_url_becomes_a_cookie(self):
+        status, _, res = self.get("/?token=s3cret", cookie=False, response=True)
+        self.assertEqual(status, 303)
+        self.assertEqual(res.getheader("Location"), "/")
+        set_cookie = res.getheader("Set-Cookie")
+        self.assertTrue(set_cookie.startswith(self.cookie + ";"))
+        self.assertIn("HttpOnly", set_cookie)
+        self.assertIn("SameSite=Strict", set_cookie)
+
+    def test_foreign_host_is_refused_even_with_the_token(self):
+        self.assertEqual(self.get("/?token=s3cret", host="attacker.example", cookie=False)[0], 403)
 
     def test_refuses_foreign_host(self):
         status, _ = self.get("/api/tasks", host="attacker.example:8765")
@@ -112,6 +148,17 @@ class ServerTests(BoardCase):
         self.assertEqual(status, 200)
         status, _ = self.get("/api/tasks", host="attacker.example:8765")
         self.assertEqual(status, 403)
+
+
+class TokenTests(unittest.TestCase):
+    def test_token_is_made_once_owner_only_and_kept(self):
+        with tempfile.TemporaryDirectory() as d:
+            home = Path(d) / "home"
+            first = board.load_token(home)
+            self.assertGreaterEqual(len(first), 32)
+            self.assertEqual((home / "board-token").stat().st_mode & 0o777, 0o600)
+            self.assertEqual(home.stat().st_mode & 0o777, 0o700)
+            self.assertEqual(board.load_token(home), first)
 
 
 if __name__ == "__main__":

@@ -1,19 +1,24 @@
 """A read-only web screen of the butler's tasks: a timeline per task, what happened lately, details.
 
 It only reads: the DB is opened read-only, herdr is only asked for pane states and screen tails,
-and nothing here moves the herdr view. It listens on 127.0.0.1 unless told otherwise (--host)."""
+and nothing here moves the herdr view. It listens on 127.0.0.1 unless told otherwise (--host), and
+serves only a browser that has opened the URL with its token: loopback is open to every local user."""
 
 from __future__ import annotations
 
 import argparse
+import hmac
 import json
 import os
 import re
+import secrets
 import sqlite3
 import sys
 import threading
 import time
+from http.cookies import SimpleCookie
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
 
 # The task CLI is the one place that knows the schema and how states are derived; reuse it.
 from butler import paths, task, version
@@ -24,9 +29,13 @@ CACHE_SECONDS = 2.0
 
 
 def connect_ro() -> sqlite3.Connection | None:
-    if not task.DB_PATH.exists():
-        return None
-    db = sqlite3.connect(f"file:{task.DB_PATH}?mode=ro", uri=True, timeout=5.0)
+    path = task.DB_PATH
+    if not path.exists():
+        # Not moved into db/ yet: the next `butler-task` call does that, and the board only reads.
+        path = path.parent.parent / path.name
+        if not path.exists():
+            return None
+    db = sqlite3.connect(f"file:{path}?mode=ro", uri=True, timeout=5.0)
     db.row_factory = sqlite3.Row
     db.execute("PRAGMA busy_timeout=5000")
     return db
@@ -122,6 +131,27 @@ class Cache:
 CACHE = Cache()
 # Host header names served; --allow-host adds more (e.g. a WSL address reached from Windows).
 ALLOWED_HOSTS = {"127.0.0.1", "localhost"}
+# What a browser must show, as ?token= once and then as a cookie. Set by main().
+TOKEN = ""
+
+
+def load_token(state_home: Path) -> str:
+    """The board's token, kept in BUTLER_HOME (owner-only) so a bookmarked URL survives restarts.
+    Delete the file to make a new one."""
+    path = state_home / "board-token"
+    try:
+        return path.read_text().strip()
+    except FileNotFoundError:
+        pass
+    state_home.mkdir(mode=0o700, parents=True, exist_ok=True)
+    token = secrets.token_urlsafe(24)
+    try:
+        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    except FileExistsError:  # another board made it first
+        return path.read_text().strip()
+    with os.fdopen(fd, "w") as f:
+        f.write(token + "\n")
+    return token
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -132,10 +162,26 @@ class Handler(BaseHTTPRequestHandler):
         if host not in ALLOWED_HOSTS:
             return self.send(403, b"forbidden host", "text/plain")
         path, _, query = self.path.partition("?")
+        params = query.split("&")
+        # Cookies are shared by every port of a host, so the name carries the port.
+        cookie = f"butler_board_{self.server.server_port}"
+        given = next((p.removeprefix("token=") for p in params if p.startswith("token=")), None)
+        if given is not None and hmac.compare_digest(given, TOKEN):
+            # Trade the token in the URL for a cookie, and drop it from the address bar.
+            self.send_response(303)
+            self.send_header("Location", path)
+            self.send_header("Set-Cookie", f"{cookie}={TOKEN}; Path=/; HttpOnly; SameSite=Strict")
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+            return
+        jar = SimpleCookie(self.headers.get("Cookie", ""))
+        if cookie not in jar or not hmac.compare_digest(jar[cookie].value, TOKEN):
+            return self.send(401, b"open the URL butler-board printed (it carries a token)",
+                             "text/plain")
         if path == "/":
             return self.send(200, PAGE.read_bytes(), "text/html; charset=utf-8")
         if path == "/api/tasks":
-            return self.json(CACHE.get(include_closed="all=1" in query.split("&")))
+            return self.json(CACHE.get(include_closed="all=1" in params))
         if m := re.fullmatch(r"/api/tasks/(\d+)", path):
             found = detail(int(m.group(1)))
             return self.json(found) if found else self.send(404, b"not found", "text/plain")
@@ -173,19 +219,21 @@ def main() -> None:
     args = p.parse_args()
     if args.home:
         os.environ["BUTLER_HOME"] = args.home
-        task.DB_PATH = paths.home() / "butler.db"
+        task.DB_PATH = paths.db_path(paths.home())
     if ":" in args.host:
         p.error("--host takes an IPv4 address or a host name; IPv6 is not supported")
     ALLOWED_HOSTS.update(args.allow_host)
     if args.host not in ("127.0.0.1", "localhost", "0.0.0.0"):
         ALLOWED_HOSTS.add(args.host)
+    global TOKEN
+    TOKEN = load_token(paths.home())
     server = ThreadingHTTPServer((args.host, args.port), Handler)
     if args.host not in ("127.0.0.1", "localhost"):
-        print(f"butler board: listening on {args.host}, not only this machine. There is no login, "
-              "and briefs, reports and worker screens are readable by anyone who can reach this "
-              f"port and send Host: {', '.join(sorted(ALLOWED_HOSTS))}.", file=sys.stderr, flush=True)
+        print(f"butler board: listening on {args.host}, not only this machine. The token is the only "
+              "lock, and it travels in plain HTTP: briefs, reports and worker screens are readable "
+              "by anyone who sees this traffic.", file=sys.stderr, flush=True)
     shown = "127.0.0.1" if args.host == "0.0.0.0" else args.host
-    print(f"butler board: http://{shown}:{args.port}/  (Ctrl+C to stop)", flush=True)
+    print(f"butler board: http://{shown}:{args.port}/?token={TOKEN}  (Ctrl+C to stop)", flush=True)
     try:
         server.serve_forever()
     except KeyboardInterrupt:

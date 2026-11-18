@@ -16,7 +16,7 @@ The operator's own butler is probably running right now, in the same herdr sessi
 
 ## How isolation works
 
-- **State:** `butler-task` keeps state in `$BUTLER_HOME/butler.db`. `vb` points `BUTLER_HOME` at the run's own `home/`, so each run has its own DB and butler session.
+- **State:** `butler-task` keeps state in `$BUTLER_HOME/db/butler.db`. `vb` points `BUTLER_HOME` at the run's own `home/`, so each run has its own DB and butler session.
 - **Agent names:** herdr names are global. `BUTLER_NAME` namespaces them: the butler agent is `$BUTLER_NAME`, and workers are `$BUTLER_NAME-0001`, and so on. The live instance uses the default, `butler`.
 - **Run folder:** each run lives in `<parent of this checkout>/.butler-verify/<run-id>/`, or `$VB_ROOT/<run-id>/` when `VB_ROOT` is set. That parent directory should be trusted in Claude Code (see Gotchas), and the run folder is outside any git repo. Its contents are `app/` (a copy of the working tree's `bin/` and `src/`, so uncommitted edits are verified), `home/` (the run's `BUTLER_HOME`, also its butler's working directory), `git-<id>/` (fixture git repo), `plain-<id>/` (fixture plain dir), `artifacts/` (evidence) and `env`.
 - **Workspace:** `launch` creates a dedicated herdr workspace for the run (label `vb-<run-id>`, no focus) and records it in `env` as `RUN_WORKSPACE_ID`. `vb` exports it to its commands as `HERDR_WORKSPACE_ID`, and `butler-task` and `bin/butler` open their tabs there, so plain-dir workers and the run's butler never land next to the operator's own tabs. Worktree workers get their own workspace from `herdr worktree create` as before.

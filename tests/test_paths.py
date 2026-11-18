@@ -37,11 +37,14 @@ class HomeFlagTests(unittest.TestCase):
                 patch.object(task, "derive_state"), \
                 patch.object(task, "DB_PATH"), patch.object(task, "TASK_CMD"):
             task.main()
-            self.assertEqual(task.DB_PATH, Path(d).resolve() / "butler.db")
+            home = Path(d).resolve()
+            self.assertEqual(task.DB_PATH, home / "db" / "butler.db")
             self.assertTrue(task.DB_PATH.is_file())
-            self.assertIn(f"--home {shlex.quote(str(Path(d).resolve()))}", task.TASK_CMD)
-            self.assertIn("--add-dir", task.agent_argv("codex", "n", 1, []))
-            self.assertIn(str(Path(d).resolve()), task.agent_argv("codex", "n", 1, []))
+            self.assertIn(f"--home {shlex.quote(str(home))}", task.TASK_CMD)
+            # A Codex worker may write the DB's directory, never BUTLER_HOME itself.
+            argv = task.agent_argv("codex", "n", 1, [])
+            self.assertEqual(argv[argv.index("--add-dir") + 1], str(home / "db"))
+            self.assertNotIn(str(home), argv)
 
 
 if __name__ == "__main__":

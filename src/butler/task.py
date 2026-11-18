@@ -25,8 +25,8 @@ except ImportError:  # run as a plain script from a checkout
 
 # Set again by main() once --home is parsed. TASK_CMD is shell-quoted at the source: it only ever
 # goes into instructions a worker runs as a command.
-DB_PATH = paths.home() / "butler.db"
-TASK_CMD = paths.task_cmd(DB_PATH.parent)
+DB_PATH = paths.db_path(paths.home())
+TASK_CMD = paths.task_cmd(paths.home())
 POLL_SECONDS = 3.0
 IDLE_POLLS_WITHOUT_WORKING = 5
 START_TIMEOUT_MS = "10000"
@@ -129,8 +129,23 @@ def herdr(*args: str) -> dict:
     return json.loads(herdr_text(*args))["result"]
 
 
+def move_legacy_db() -> None:
+    """Move a DB from BUTLER_HOME itself, where releases before db/ kept it, into db/. The WAL and
+    shared-memory files go first, so the DB never appears at its new path without them; a racing
+    process finds each file already moved."""
+    legacy = DB_PATH.parent.parent / DB_PATH.name
+    if DB_PATH.exists() or not legacy.exists():
+        return
+    for suffix in ("-wal", "-shm", ""):
+        try:
+            os.rename(f"{legacy}{suffix}", f"{DB_PATH}{suffix}")
+        except FileNotFoundError:
+            pass
+
+
 def connect() -> sqlite3.Connection:
-    DB_PATH.parent.mkdir(parents=True, exist_ok=True)
+    paths.make_db_dir(DB_PATH)
+    move_legacy_db()
     db = sqlite3.connect(DB_PATH, timeout=5.0, isolation_level=None)
     db.row_factory = sqlite3.Row
     db.execute("PRAGMA busy_timeout=5000")
@@ -234,7 +249,8 @@ def agent_argv(agent: str, name: str, task_id: int, git_dirs: list[str]) -> list
         return ["--name", name, kickoff(task_id)]
     # Codex's workspace-write sandbox only lets it write inside its cwd, but `task report` writes
     # the butler's DB, and a commit in a worktree writes the main repo's .git. --add-dir makes
-    # both writable, so neither needs an approval.
+    # both writable, so neither needs an approval. Only the DB's own directory, never BUTLER_HOME:
+    # see paths.db_path.
     dirs = [str(DB_PATH.parent), *git_dirs]
     return ["--sandbox", "workspace-write", *(a for d in dirs for a in ("--add-dir", d)),
             kickoff(task_id)]
@@ -251,6 +267,43 @@ def commit_dirs(worktree: str) -> list[str]:
     common = Path(out[1])
     dirs = [out[0], *(str(common / d) for d in ("objects", "refs", "logs"))]
     return [d for d in dirs if Path(d).is_dir()]
+
+
+def worktree_git_problem(task: Task) -> str | None:
+    """Why running git in a task's worktree is unsafe, or None when its links are as git made them.
+
+    A worker can write its worktree and its gitdir (commit_dirs), so it could point the worktree at
+    a gitdir or common dir whose config it wrote, or add a config.worktree; core.fsmonitor or
+    core.hooksPath there would run with the operator's next git command in the worktree, outside
+    any sandbox. butler-task itself only touches a worktree from the main repo, with
+    `worktree remove --force`, which reads none of them. The links are read as files, never by git.
+    """
+    if not task.worktree_path or not task.repo_root or not Path(task.worktree_path).exists():
+        return None
+    worktree = Path(task.worktree_path)
+    common = Path(subprocess.run(
+        ["git", "-C", task.repo_root, "rev-parse", "--path-format=absolute", "--git-common-dir"],
+        capture_output=True, text=True, check=True,
+    ).stdout.strip()).resolve()
+    try:
+        link = (worktree / ".git").read_text()
+        if not link.startswith("gitdir: "):
+            return f"{worktree}/.git is not a link to a gitdir"
+        gitdir = (worktree / link.removeprefix("gitdir: ").strip()).resolve()
+        if gitdir.parent != common / "worktrees":
+            return f"{worktree}/.git points at {gitdir}, outside {common}/worktrees"
+        if (gitdir / (gitdir / "commondir").read_text().strip()).resolve() != common:
+            return f"{gitdir}/commondir does not point at {common}"
+        if (gitdir / "config.worktree").exists():
+            return f"{gitdir}/config.worktree exists"
+    except OSError as e:
+        return f"cannot read the worktree's git links: {e}"
+    return None
+
+
+def git_warning(task: Task) -> str:
+    problem = worktree_git_problem(task)
+    return f"WARNING: do not run git in {task.worktree_path}: {problem}" if problem else ""
 
 
 def cmd_start(args: argparse.Namespace) -> None:
@@ -428,6 +481,8 @@ def cmd_show(args: argparse.Namespace) -> None:
                  "pane_id", "created_at", "reported_at", "closed_at"):
         if (value := getattr(t, name)) is not None:
             print(f"{name + ':':<10} {value}")
+    if warning := git_warning(t):
+        print(warning)
     print("\n--- brief ---\n" + t.brief.rstrip())
     if t.report is not None:
         print("\n--- report ---\n" + t.report.rstrip())
@@ -512,6 +567,8 @@ def cmd_close(args: argparse.Namespace) -> None:
         record(db, task.id, "closed")
     kept = task.worktree_path and Path(task.worktree_path).exists()
     print(f"closed task {task.label}" + (f" (worktree kept: {task.worktree_path})" if kept else ""))
+    if kept and (warning := git_warning(task)):
+        print(warning, file=sys.stderr)
 
 
 @dataclass(frozen=True)
@@ -619,8 +676,8 @@ def main() -> None:
     if args.home:
         global DB_PATH, TASK_CMD
         os.environ["BUTLER_HOME"] = args.home
-        DB_PATH = paths.home() / "butler.db"
-        TASK_CMD = paths.task_cmd(DB_PATH.parent)
+        DB_PATH = paths.db_path(paths.home())
+        TASK_CMD = paths.task_cmd(paths.home())
     try:
         args.fn(args)
     except HerdrError as e:
