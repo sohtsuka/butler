@@ -15,6 +15,7 @@ dependencies = []
 [project.scripts]
 butler = "butler.launcher:main"
 butler-task = "butler.task:main"
+butler-board = "butler.board:main"
 
 [project.urls]
 Repository = "https://github.com/sohtsuka/butler"

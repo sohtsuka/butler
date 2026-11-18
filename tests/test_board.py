@@ -1,8 +1,6 @@
-"""bin/board: read-only snapshots of the task DB, served to local hosts only."""
+"""butler-board: read-only snapshots of the task DB, served to local hosts only."""
 
 import http.client
-import importlib.machinery
-import importlib.util
 from pathlib import Path
 import json
 import sys
@@ -12,13 +10,8 @@ import unittest
 from unittest.mock import patch
 
 
-SCRIPT = Path(__file__).resolve().parents[1] / "bin" / "board"
-loader = importlib.machinery.SourceFileLoader("board_under_test", str(SCRIPT))
-spec = importlib.util.spec_from_loader(loader.name, loader)
-board = importlib.util.module_from_spec(spec)
-sys.modules[spec.name] = board
-loader.exec_module(board)
-task = board.task
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
+from butler import board, task  # noqa: E402
 
 
 class BoardCase(unittest.TestCase):
