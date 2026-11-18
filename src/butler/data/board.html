@@ -250,6 +250,10 @@ async function select(id) {
 async function refresh() {
   try {
     const res = await fetch(`/api/tasks${$("closed").checked ? "?all=1" : ""}`);
+    if (res.status === 401) {
+      $("err").textContent = "トークンが合いません。butler-board が表示した URL（?token= 付き）を開き直してください。";
+      return;
+    }
     data = await res.json();
     $("err").textContent = "";
     render();

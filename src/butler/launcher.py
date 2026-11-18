@@ -39,7 +39,7 @@ def herdr(*args: str) -> tuple[int, dict]:
 def claude_args() -> list[str]:
     """claude's argv: the butler's pinned session, plus the flags that make it the butler."""
     if not ID_FILE.is_file() or not ID_FILE.read_text().strip():
-        ID_FILE.parent.mkdir(parents=True, exist_ok=True)
+        ID_FILE.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
         tmp = ID_FILE.with_name(f"{ID_FILE.name}.tmp.{os.getpid()}")
         tmp.write_text(f"{uuid.uuid4()}\n")
         tmp.rename(ID_FILE)

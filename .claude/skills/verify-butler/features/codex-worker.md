@@ -1,6 +1,6 @@
 # Codex worker
 
-`butler-task start --agent codex` runs the worker on Codex CLI (`herdr agent start --kind codex`) instead of Claude Code. The kickoff rides in Codex's argv like Claude's, and Codex starts with `--sandbox workspace-write --add-dir $BUTLER_HOME`, so its `butler-task report` can write the butler's DB without an approval. Every other subcommand is agent-agnostic.
+`butler-task start --agent codex` runs the worker on Codex CLI (`herdr agent start --kind codex`) instead of Claude Code. The kickoff rides in Codex's argv like Claude's, and Codex starts with `--sandbox workspace-write --add-dir $BUTLER_HOME/db` (never `$BUTLER_HOME` itself), so its `butler-task report` can write the butler's DB without an approval. Every other subcommand is agent-agnostic.
 
 ## Sub-features
 

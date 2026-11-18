@@ -74,7 +74,7 @@ cmd_doctor() {
   check "agent namespace is not the live butler" '[[ "$BUTLER_NAME" != butler ]]'
   echo "info  herdr $(herdr --version | cut -d" " -f2), $(claude --version), $(codex --version 2>/dev/null || echo "codex missing")"
   echo "info  run workspace=${HERDR_WORKSPACE_ID:-none} (caller: ${CALLER_WORKSPACE_ID:-none})"
-  echo "info  BUTLER_NAME=$BUTLER_NAME  db=$BUTLER_HOME/butler.db"
+  echo "info  BUTLER_NAME=$BUTLER_NAME  db=$BUTLER_HOME/db/butler.db"
   echo "info  run agents: $(herdr agent list | jq -r --arg n "$BUTLER_NAME" '[.result.agents[] | select((.name // "") | startswith($n)) | "\(.name)=\(.agent_status)"] | join(" ")')"
   [[ $ok == 1 ]] || die "doctor failed"
 }
@@ -145,7 +145,7 @@ cmd_settle() {
 
 cmd_cleanup() {
   load "$1"
-  local db="$BUTLER_HOME/butler.db"
+  local db="$BUTLER_HOME/db/butler.db"
   if [[ -f "$db" ]]; then
     for id in $(python3 -c "import sqlite3,sys;[print(r[0]) for r in sqlite3.connect(sys.argv[1]).execute('SELECT id FROM tasks')]" "$db"); do
       butler-task close "$id" --remove-worktree || true
