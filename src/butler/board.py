@@ -167,9 +167,10 @@ class Handler(BaseHTTPRequestHandler):
         cookie = f"butler_board_{self.server.server_port}"
         given = next((p.removeprefix("token=") for p in params if p.startswith("token=")), None)
         if given is not None and hmac.compare_digest(given, TOKEN):
-            # Trade the token in the URL for a cookie, and drop it from the address bar.
+            # Trade the token in the URL for a cookie, and drop it from the address bar. Always to
+            # the page itself: echoing the request path would make `//host` an open redirect.
             self.send_response(303)
-            self.send_header("Location", path)
+            self.send_header("Location", "/")
             self.send_header("Set-Cookie", f"{cookie}={TOKEN}; Path=/; HttpOnly; SameSite=Strict")
             self.send_header("Content-Length", "0")
             self.end_headers()

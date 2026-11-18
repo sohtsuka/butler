@@ -134,6 +134,8 @@ class ServerTests(BoardCase):
         self.assertTrue(set_cookie.startswith(self.cookie + ";"))
         self.assertIn("HttpOnly", set_cookie)
         self.assertIn("SameSite=Strict", set_cookie)
+        _, _, res = self.get("//attacker.example/?token=s3cret", cookie=False, response=True)
+        self.assertEqual(res.getheader("Location"), "/")
 
     def test_foreign_host_is_refused_even_with_the_token(self):
         self.assertEqual(self.get("/?token=s3cret", host="attacker.example", cookie=False)[0], 403)
