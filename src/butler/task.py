@@ -18,10 +18,10 @@ from pathlib import Path
 from typing import Literal
 
 try:
-    from butler import paths
+    from butler import paths, version
 except ImportError:  # run as a plain script from a checkout
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-    from butler import paths
+    from butler import paths, version
 
 # Set again by main() once --home is parsed. TASK_CMD is shell-quoted at the source: it only ever
 # goes into instructions a worker runs as a command.
@@ -563,6 +563,7 @@ def main() -> None:
     p = argparse.ArgumentParser(prog="butler-task")
     p.add_argument("--home", help="the butler's state directory (default: $BUTLER_HOME, else "
                    "$XDG_STATE_HOME/butler)")
+    version.add_flag(p, "butler-task")
     sub = p.add_subparsers(dest="cmd", required=True)
 
     s = sub.add_parser("start", help="start a worker; brief on stdin")

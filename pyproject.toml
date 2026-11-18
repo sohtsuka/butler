@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "butler"
-version = "0.1.0"
+dynamic = ["version"]
 description = "A long-lived Claude Code session that talks with you and runs herdr-hosted worker agents"
 readme = "README.md"
 license = "Apache-2.0"
@@ -19,6 +19,9 @@ butler-board = "butler.board:main"
 
 [project.urls]
 Repository = "https://github.com/sohtsuka/butler"
+
+[tool.hatch.version]
+path = "src/butler/__init__.py"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/butler"]

@@ -15,6 +15,17 @@ butler doctor   # herdr / claude / codex の有無と版、BUTLER_HOME と信頼
 
 `butler`、`butler-task`、`butler-board` が `~/.local/bin` に入ります。更新は差分を確認してから、新しい SHA で `uv tool install --force git+https://github.com/sohtsuka/butler@<新しい SHA>` を実行します。自動更新はしません。アンインストールは `uv tool uninstall butler` です（状態は `BUTLER_HOME` に残ります）。
 
+### バージョンの確認
+
+```
+$ butler --version
+butler 0.1.0 (4871fd6)
+```
+
+`butler-task --version` と `butler-board --version` も同じ形式です。括弧内はインストール元のコミットで、`uv tool install git+…@<SHA>` で入れた場合は uv が記録した SHA、チェックアウトの `bin/` から動かした場合はその `HEAD` です（未コミットの変更があれば `-dirty` が付きます）。`butler doctor` は SHA を省略せずに表示するので、同じものを入れ直すときに使えます。
+
+バージョン番号は `src/butler/__init__.py` の `__version__` だけで管理しています（`pyproject.toml` はそこから読みます）。
+
 ## 状態の置き場所（BUTLER_HOME）
 
 タスクの DB（`butler.db`）と butler のセッション ID（`butler-session-id`）は `BUTLER_HOME` に置きます。既定は `${XDG_STATE_HOME:-~/.local/state}/butler` です。インストール先やチェックアウトには何も書きません。
